@@ -243,20 +243,30 @@ input, textarea { font-family: inherit; }
 }
 
 /* Tag actions on long press */
+.tag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
 .tag-chip .tag-action {
   display: none;
-  margin-left: 6px;
   width: 18px;
   height: 18px;
   border-radius: 50%;
-  background: rgba(0,0,0,0.1);
+  background: rgba(0,0,0,0.08);
   align-items: center;
   justify-content: center;
-  font-size: 11px;
-  font-weight: bold;
+  transition: background 0.15s;
 }
 .tag-chip.editing .tag-action { display: flex; }
 .tag-chip.active .tag-action { background: rgba(255,255,255,0.2); }
+.tag-chip .tag-action:hover { background: rgba(0,0,0,0.15); }
+.tag-chip.active .tag-action:hover { background: rgba(255,255,255,0.3); }
+.tag-chip .tag-action svg {
+  width: 10px;
+  height: 10px;
+  stroke-width: 2.5;
+}
 
 .pinned-tags {
   display: flex;
@@ -292,7 +302,7 @@ input, textarea { font-family: inherit; }
 .phrase-card.selected {
   border: 2px solid var(--text);
   background: var(--bg-soft);
-  padding: 21px 23px; /* offset for border */
+  padding: 21px 23px;
 }
 .card-checkbox {
   position: absolute;
@@ -306,6 +316,7 @@ input, textarea { font-family: inherit; }
   align-items: center;
   justify-content: center;
   background: #fff;
+  transition: all 0.2s var(--ease);
 }
 .phrase-card.selectable .card-checkbox { display: flex; }
 .phrase-card.selected .card-checkbox {
@@ -1137,7 +1148,16 @@ function renderTags() {
   tags.forEach(({ tag, count }) => {
     const b = document.createElement('button');
     b.className = 'tag-chip' + (state.activeTag === tag ? ' active' : '');
-    b.innerHTML = `${escapeHtml(tag)} <span class="count">${count}</span> <span class="tag-action pin">📌</span> <span class="tag-action delete">✕</span>`;
+    b.innerHTML = `
+      ${escapeHtml(tag)} 
+      <span class="count">${count}</span> 
+      <span class="tag-action pin">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>
+      </span>
+      <span class="tag-action delete">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+      </span>
+    `;
     b.onclick = () => {
       if (!b.classList.contains('editing')) {
         state.activeTag = state.activeTag === tag ? null : tag;
@@ -1161,7 +1181,16 @@ function renderPinnedTags() {
     const b = document.createElement('button');
     b.className = 'tag-chip pinned' + (state.activeTag === tag ? ' active' : '');
     const count = state.phrases.filter(p => (p.tags || []).includes(tag)).length;
-    b.innerHTML = `${escapeHtml(tag)} <span class="count">${count}</span> <span class="tag-action unpin">Unpin</span> <span class="tag-action delete">✕</span>`;
+    b.innerHTML = `
+      ${escapeHtml(tag)} 
+      <span class="count">${count}</span> 
+      <span class="tag-action unpin">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21l18-18"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7"/></svg>
+      </span>
+      <span class="tag-action delete">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+      </span>
+    `;
     b.onclick = () => {
       if (!b.classList.contains('editing')) {
         state.activeTag = state.activeTag === tag ? null : tag;
@@ -1171,8 +1200,7 @@ function renderPinnedTags() {
     attachTagHoldHandlers(b, tag, true);
     els.pinnedTagsFilter.appendChild(b);
   });
-}
-
+  }
 function attachTagHoldHandlers(btn, tag, isPinned) {
   let pressTimer = null;
   let isHolding = false;
@@ -1277,6 +1305,27 @@ function renderList(animate) {
     card.dataset.id = p.id;
     if (animate) card.style.animationDelay = (Math.min(i, 8) * 35) + 'ms';
 
+    let actionsHTML = '';
+    if (!state.selectionMode) {
+      actionsHTML = `
+        <div class="card-actions">
+          <button class="action-btn edit" data-action="edit" aria-label="Edit phrase">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z"/>
+            </svg>
+          </button>
+          <button class="action-btn delete" data-action="delete" aria-label="Delete phrase">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/>
+              <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+              <line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/>
+            </svg>
+          </button>
+        </div>
+        <div class="press-indicator"></div>
+      `;
+    }
+
     card.innerHTML = `
       <div class="card-checkbox">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
@@ -1288,30 +1337,13 @@ function renderList(animate) {
           ${p.tags.map(t => `<span class="phrase-tag">${escapeHtml(t)}</span>`).join('')}
         </div>` : ''
       }
-      ${!state.selectionMode ? `
-      <div class="card-actions">
-        <button class="action-btn edit" data-action="edit" aria-label="Edit phrase">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z"/>
-          </svg>
-        </button>
-        <button class="action-btn delete" data-action="delete" aria-label="Delete phrase">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/>
-            <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
-            <line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/>
-          </svg>
-        </button>
-      </div>
-      <div class="press-indicator"></div>
-      ` : ''}
+      ${actionsHTML}
     `;
 
     attachCardHandlers(card, p);
     els.list.appendChild(card);
   });
 }
-
 // ============ Press-and-hold & Selection ============
 function attachCardHandlers(card, phrase) {
   // Selection Mode Click
