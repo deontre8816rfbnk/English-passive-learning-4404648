@@ -1669,12 +1669,14 @@ async function deletePhrase(id) {
 
 // ============ Event wiring ============
 els.addBtn.addEventListener('click', () => openModal());
+els.selectBtn.addEventListener('click', toggleSelectionMode);
+els.btnDeleteSelected.addEventListener('click', deleteSelected);
+els.btnCancelSelection.addEventListener('click', toggleSelectionMode);
 els.modalClose.addEventListener('click', closeModal);
 els.modal.addEventListener('click', (e) => {
   if (e.target === els.modal) closeModal();
 });
 els.form.addEventListener('submit', savePhrase);
-
 els.searchInput.addEventListener('input', (e) => {
   state.search = e.target.value;
   els.clearBtn.style.display = state.search ? 'flex' : 'none';
@@ -1695,11 +1697,9 @@ document.addEventListener('keydown', (e) => {
 
 // ============ Init ============
 async function init() {
+  loadPinnedTags();
   await loadFromCloud();
   render(true);
 }
 
 init();
-</script>
-</body>
-            </html>
