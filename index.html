@@ -1,0 +1,1289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#ffffff">
+<title>Phrases — A Personal Lexicon</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..900;1,9..144,300..900&family=DM+Sans:opsz,wght@9..40,400..700&display=swap" rel="stylesheet">
+<style>
+/* ============ Foundation ============ */
+:root {
+  --bg: #ffffff;
+  --bg-soft: rgba(0, 0, 0, 0.045);
+  --bg-soft-hover: rgba(0, 0, 0, 0.075);
+  --bg-soft-active: rgba(0, 0, 0, 0.1);
+  --bg-overlay: rgba(0, 0, 0, 0.35);
+  --text: #0a0a0a;
+  --text-soft: #5e5e5e;
+  --text-faint: #a0a0a0;
+  --border: rgba(0, 0, 0, 0.07);
+  --shadow-md: 0 4px 24px rgba(0,0,0,0.05);
+  --shadow-lg: 0 16px 48px rgba(0,0,0,0.08), 0 4px 12px rgba(0,0,0,0.04);
+  --radius-sm: 10px;
+  --radius: 16px;
+  --radius-lg: 22px;
+  --serif: 'Fraunces', Georgia, serif;
+  --sans: 'DM Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --press-duration: 480ms;
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+html, body { height: 100%; }
+
+body {
+  font-family: var(--sans);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 16px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  overflow-x: hidden;
+  font-feature-settings: 'ss01', 'cv11';
+}
+
+button { font-family: inherit; color: inherit; }
+input, textarea { font-family: inherit; }
+
+/* ============ Layout shell ============ */
+.app {
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 40px 24px 140px;
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+/* ============ Header ============ */
+.header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: 34px;
+  padding-bottom: 2px;
+}
+
+.brand {
+  font-family: var(--serif);
+  font-weight: 500;
+  font-size: 25px;
+  letter-spacing: -0.02em;
+  font-style: italic;
+  line-height: 1;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.brand-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  background: var(--text);
+  border-radius: 50%;
+  animation: dotPulse 3.2s var(--ease) infinite;
+}
+
+@keyframes dotPulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.4; transform: scale(0.7); }
+}
+
+.brand-count {
+  font-size: 11px;
+  color: var(--text-faint);
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  font-feature-settings: 'tnum';
+}
+
+/* ============ Search row ============ */
+.search-row {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.search-bar {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  background: var(--bg-soft);
+  border-radius: var(--radius);
+  padding: 0 14px;
+  height: 54px;
+  transition: background 0.2s var(--ease);
+}
+
+.search-bar:focus-within { background: var(--bg-soft-hover); }
+
+.search-bar svg {
+  width: 18px;
+  height: 18px;
+  color: var(--text-faint);
+  flex-shrink: 0;
+  transition: color 0.2s var(--ease);
+}
+.search-bar:focus-within svg { color: var(--text-soft); }
+
+.search-input {
+  border: none;
+  outline: none;
+  background: transparent;
+  width: 100%;
+  height: 100%;
+  padding: 0 12px;
+  font-size: 15px;
+  color: var(--text);
+  font-weight: 400;
+}
+.search-input::placeholder { color: var(--text-faint); }
+
+.clear-btn {
+  background: transparent;
+  border: none;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: var(--text-faint);
+  transition: background 0.15s var(--ease), color 0.15s var(--ease);
+}
+.clear-btn:hover { background: var(--bg-soft-active); color: var(--text-soft); }
+.clear-btn svg { width: 13px; height: 13px; stroke-width: 2.5; }
+
+/* The + button */
+.add-btn {
+  width: 54px;
+  height: 54px;
+  border-radius: var(--radius);
+  background: var(--text);
+  color: #fff;
+  border: none;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.18s var(--ease), background 0.2s var(--ease), box-shadow 0.2s var(--ease);
+  flex-shrink: 0;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+}
+.add-btn:hover {
+  background: #1f1f1f;
+  transform: translateY(-1px);
+  box-shadow: 0 8px 18px rgba(0,0,0,0.18);
+}
+.add-btn:active { transform: scale(0.93); background: #000; }
+.add-btn svg { width: 22px; height: 22px; stroke-width: 2.2; }
+
+/* ============ Tags filter row ============ */
+.tags-filter {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 6px 0 10px;
+  margin: 0 -24px;
+  padding-left: 24px;
+  padding-right: 24px;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+.tags-filter::-webkit-scrollbar { display: none; }
+
+.tag-chip {
+  flex-shrink: 0;
+  background: var(--bg-soft);
+  border: none;
+  border-radius: 100px;
+  padding: 9px 16px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-soft);
+  cursor: pointer;
+  transition: background 0.2s var(--ease), color 0.2s var(--ease), transform 0.15s var(--ease);
+  white-space: nowrap;
+  letter-spacing: 0.01em;
+}
+.tag-chip:hover { background: var(--bg-soft-hover); color: var(--text); }
+.tag-chip:active { transform: scale(0.95); }
+.tag-chip.active { background: var(--text); color: #fff; }
+.tag-chip.active .count { color: rgba(255,255,255,0.55); }
+.tag-chip .count {
+  opacity: 0.6;
+  margin-left: 6px;
+  font-feature-settings: 'tnum';
+  font-weight: 400;
+}
+
+/* ============ Phrases list ============ */
+.phrases {
+  margin-top: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* Card */
+.phrase-card {
+  background: var(--bg);
+  border-radius: var(--radius);
+  padding: 22px 24px;
+  position: relative;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  transition: background 0.25s var(--ease), transform 0.25s var(--ease), border-color 0.25s var(--ease);
+  border: 1px solid var(--border);
+  overflow: hidden;
+  touch-action: manipulation;
+}
+
+.phrase-card.animate-in {
+  animation: cardIn 0.5s var(--ease-out) backwards;
+}
+@keyframes cardIn {
+  from { opacity: 0; transform: translateY(14px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@media (hover: hover) {
+  .phrase-card:hover { background: var(--bg-soft); border-color: transparent; }
+}
+
+.phrase-card.pressing {
+  background: var(--bg-soft);
+  border-color: transparent;
+  transform: scale(0.985);
+}
+
+.phrase-card.revealed {
+  background: var(--bg-soft);
+  border-color: transparent;
+}
+
+/* Press progress */
+.press-indicator {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  height: 2px;
+  background: var(--text);
+  width: 0;
+  opacity: 0;
+  transition: width var(--press-duration) linear, opacity 0.2s var(--ease);
+  pointer-events: none;
+}
+.phrase-card.pressing .press-indicator { width: 100%; opacity: 0.55; }
+.phrase-card:not(.pressing) .press-indicator {
+  transition: width 0.15s var(--ease), opacity 0.2s var(--ease);
+}
+
+.phrase-text {
+  font-family: var(--serif);
+  font-size: 23px;
+  font-weight: 500;
+  line-height: 1.25;
+  letter-spacing: -0.015em;
+  margin-bottom: 8px;
+  color: var(--text);
+  word-wrap: break-word;
+  overflow-wrap: anywhere;
+  transition: opacity 0.25s var(--ease);
+}
+
+.phrase-meaning {
+  font-size: 14.5px;
+  color: var(--text-soft);
+  line-height: 1.55;
+  margin-bottom: 14px;
+  word-wrap: break-word;
+  overflow-wrap: anywhere;
+  transition: opacity 0.25s var(--ease);
+}
+
+.phrase-tags {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  transition: opacity 0.25s var(--ease);
+}
+
+.phrase-tag {
+  background: var(--bg-soft);
+  border-radius: 100px;
+  padding: 3px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-soft);
+  letter-spacing: 0.04em;
+  text-transform: lowercase;
+}
+
+/* Dim content when actions revealed */
+.phrase-card.revealed .phrase-text,
+.phrase-card.revealed .phrase-meaning,
+.phrase-card.revealed .phrase-tags { opacity: 0.22; }
+
+/* Action buttons */
+.card-actions {
+  position: absolute;
+  top: 50%;
+  right: 18px;
+  transform: translateY(-50%) translateX(14px);
+  display: flex;
+  gap: 8px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s var(--ease), transform 0.32s var(--ease-out);
+}
+.phrase-card.revealed .card-actions {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(-50%) translateX(0);
+}
+
+.action-btn {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  background: #fff;
+  border: 1px solid var(--border);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.18s var(--ease), color 0.18s var(--ease), border-color 0.18s var(--ease), transform 0.18s var(--ease);
+  color: var(--text);
+  box-shadow: 0 2px 10px rgba(0,0,0,0.06);
+}
+.action-btn:hover { background: var(--bg-soft); transform: translateY(-1px); }
+.action-btn:active { transform: scale(0.92); }
+.action-btn.delete:hover { background: #fef2f2; border-color: #fecaca; color: #dc2626; }
+.action-btn svg { width: 16px; height: 16px; }
+
+/* ============ Empty & no-results ============ */
+.empty-state {
+  text-align: center;
+  padding: 90px 20px 60px;
+  color: var(--text-faint);
+}
+.empty-state .icon {
+  font-family: var(--serif);
+  font-size: 88px;
+  font-style: italic;
+  font-weight: 300;
+  color: var(--text-faint);
+  opacity: 0.28;
+  margin-bottom: 18px;
+  line-height: 1;
+  letter-spacing: -0.04em;
+}
+.empty-state h3 {
+  font-family: var(--serif);
+  font-weight: 500;
+  font-size: 22px;
+  color: var(--text-soft);
+  margin-bottom: 6px;
+  font-style: italic;
+  letter-spacing: -0.01em;
+}
+.empty-state p {
+  font-size: 14px;
+  color: var(--text-faint);
+}
+
+.no-results {
+  text-align: center;
+  padding: 80px 20px;
+  color: var(--text-faint);
+  font-style: italic;
+  font-family: var(--serif);
+  font-size: 19px;
+  letter-spacing: -0.01em;
+}
+
+/* ============ Footer ============ */
+.footer {
+  position: fixed;
+  bottom: max(16px, env(safe-area-inset-bottom));
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 10.5px;
+  color: var(--text-faint);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  font-weight: 500;
+  pointer-events: none;
+  opacity: 0.55;
+  text-align: center;
+  white-space: nowrap;
+}
+
+/* ============ Modal ============ */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: var(--bg-overlay);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s var(--ease);
+  z-index: 100;
+}
+.modal-backdrop.open { opacity: 1; pointer-events: auto; }
+
+.modal {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: #fff;
+  border-radius: 28px 28px 0 0;
+  padding: 16px 24px 28px;
+  padding-bottom: max(28px, env(safe-area-inset-bottom));
+  transform: translateY(100%);
+  transition: transform 0.42s var(--ease-out);
+  z-index: 101;
+  max-height: 92vh;
+  max-height: 92dvh;
+  overflow-y: auto;
+  box-shadow: 0 -8px 40px rgba(0,0,0,0.12);
+  -webkit-overflow-scrolling: touch;
+}
+.modal-backdrop.open .modal { transform: translateY(0); }
+
+.modal-handle {
+  width: 36px;
+  height: 4px;
+  background: var(--bg-soft-active);
+  border-radius: 100px;
+  margin: 0 auto 18px;
+}
+
+@media (min-width: 640px) {
+  .modal {
+    bottom: auto;
+    top: 50%;
+    left: 50%;
+    right: auto;
+    transform: translate(-50%, calc(-50% + 24px));
+    width: 100%;
+    max-width: 540px;
+    border-radius: var(--radius-lg);
+    opacity: 0;
+    transition: opacity 0.3s var(--ease), transform 0.35s var(--ease-out);
+    pointer-events: none;
+    padding: 32px;
+    max-height: 88vh;
+    max-height: 88dvh;
+  }
+  .modal-handle { display: none; }
+  .modal-backdrop.open .modal {
+    transform: translate(-50%, -50%);
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 22px;
+}
+.modal-title {
+  font-family: var(--serif);
+  font-size: 26px;
+  font-weight: 500;
+  font-style: italic;
+  letter-spacing: -0.02em;
+  line-height: 1;
+}
+
+.modal-close {
+  background: var(--bg-soft);
+  border: none;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.18s var(--ease), transform 0.25s var(--ease);
+  color: var(--text);
+}
+.modal-close:hover { background: var(--bg-soft-hover); transform: rotate(90deg); }
+.modal-close:active { transform: scale(0.9) rotate(45deg); }
+.modal-close svg { width: 14px; height: 14px; stroke-width: 2.5; }
+
+/* Form fields */
+.field { margin-bottom: 18px; }
+.field-label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-faint);
+  margin-bottom: 8px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.field input, .field textarea {
+  width: 100%;
+  background: var(--bg-soft);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  padding: 14px 16px;
+  font-size: 15px;
+  color: var(--text);
+  outline: none;
+  transition: background 0.2s var(--ease), border 0.2s var(--ease);
+  resize: none;
+}
+.field textarea { min-height: 88px; line-height: 1.5; }
+.field input:focus, .field textarea:focus { background: #fff; border-color: var(--text); }
+.field input::placeholder, .field textarea::placeholder { color: var(--text-faint); }
+
+#phrase-input {
+  font-family: var(--serif);
+  font-size: 19px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+
+/* Tag editor */
+.tag-editor {
+  background: var(--bg-soft);
+  border-radius: var(--radius-sm);
+  padding: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  min-height: 52px;
+  transition: background 0.2s var(--ease), border 0.2s var(--ease);
+  border: 1px solid transparent;
+}
+.tag-editor:focus-within { background: #fff; border-color: var(--text); }
+
+.tag-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: var(--text);
+  color: #fff;
+  border-radius: 100px;
+  padding: 5px 6px 5px 12px;
+  font-size: 13px;
+  font-weight: 500;
+  animation: tagIn 0.22s var(--ease-out);
+}
+@keyframes tagIn {
+  from { opacity: 0; transform: scale(0.6); }
+  to   { opacity: 1; transform: scale(1); }
+}
+.tag-pill .remove {
+  background: rgba(255,255,255,0.2);
+  border: none;
+  border-radius: 50%;
+  width: 18px;
+  height: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  color: #fff;
+  font-size: 13px;
+  line-height: 1;
+  transition: background 0.15s var(--ease), transform 0.15s var(--ease);
+  padding: 0;
+}
+.tag-pill .remove:hover { background: rgba(255,255,255,0.4); transform: scale(1.12); }
+.tag-pill .remove:active { transform: scale(0.85); }
+
+.tag-input {
+  border: none;
+  background: transparent;
+  outline: none;
+  font-size: 14px;
+  color: var(--text);
+  min-width: 100px;
+  flex: 1;
+  padding: 6px;
+}
+.tag-input::placeholder { color: var(--text-faint); }
+
+/* Tag suggestions */
+.tag-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+.tag-suggestion {
+  background: var(--bg-soft);
+  border: none;
+  border-radius: 100px;
+  padding: 6px 12px;
+  font-size: 12px;
+  color: var(--text-soft);
+  cursor: pointer;
+  transition: background 0.15s var(--ease), color 0.15s var(--ease), transform 0.15s var(--ease);
+  font-weight: 500;
+}
+.tag-suggestion:hover { background: var(--bg-soft-hover); color: var(--text); }
+.tag-suggestion:active { transform: scale(0.94); }
+
+/* Save button */
+.save-btn {
+  width: 100%;
+  background: var(--text);
+  color: #fff;
+  border: none;
+  border-radius: var(--radius);
+  padding: 16px;
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+  margin-top: 10px;
+  transition: transform 0.15s var(--ease), background 0.2s var(--ease), box-shadow 0.2s var(--ease);
+  letter-spacing: 0.01em;
+}
+.save-btn:hover { background: #1f1f1f; box-shadow: 0 8px 18px rgba(0,0,0,0.18); }
+.save-btn:active { transform: scale(0.98); }
+
+/* ============ Toast ============ */
+.toast {
+  position: fixed;
+  bottom: 56px;
+  left: 50%;
+  transform: translateX(-50%) translateY(20px);
+  background: var(--text);
+  color: #fff;
+  padding: 11px 20px;
+  border-radius: 100px;
+  font-size: 13px;
+  font-weight: 500;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.3s var(--ease), transform 0.3s var(--ease);
+  z-index: 200;
+  box-shadow: var(--shadow-lg);
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+.toast.show {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+}
+
+/* ============ Mobile tweaks ============ */
+@media (max-width: 600px) {
+  .app { padding: 28px 18px 120px; }
+  .header { margin-bottom: 26px; }
+  .brand { font-size: 22px; }
+  .phrase-text { font-size: 20px; }
+  .phrase-card { padding: 20px; }
+  .search-bar, .add-btn { height: 52px; }
+  .add-btn { width: 52px; }
+  .add-btn svg { width: 20px; height: 20px; }
+  .tags-filter { margin: 0 -18px; padding-left: 18px; padding-right: 18px; }
+  .modal { padding: 14px 20px 24px; }
+  .modal-title { font-size: 23px; }
+  #phrase-input { font-size: 17px; }
+  .empty-state .icon { font-size: 72px; }
+  .empty-state h3 { font-size: 19px; }
+  .footer { font-size: 9.5px; letter-spacing: 0.12em; }
+}
+
+/* ============ Desktop two-column ============ */
+@media (min-width: 720px) {
+  .phrases {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 14px;
+  }
+}
+
+/* ============ Reduced motion ============ */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+</style>
+</head>
+<body>
+
+<div class="app">
+  <header class="header">
+    <div class="brand">Phrases<span class="brand-dot"></span></div>
+    <div class="brand-count" id="count-display">No phrases</div>
+  </header>
+
+  <div class="search-row">
+    <div class="search-bar">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="11" cy="11" r="7"/>
+        <path d="m20 20-3.5-3.5"/>
+      </svg>
+      <input type="text" class="search-input" id="search-input" placeholder="Search phrases, meanings, tags…" autocomplete="off" spellcheck="false">
+      <button class="clear-btn" id="clear-btn" aria-label="Clear search" style="display:none;">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round">
+          <path d="M18 6 6 18M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+    <button class="add-btn" id="add-btn" aria-label="Add phrase">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round">
+        <path d="M12 5v14M5 12h14"/>
+      </svg>
+    </button>
+  </div>
+
+  <div class="tags-filter" id="tags-filter"></div>
+
+  <main class="phrases" id="phrases-list"></main>
+</div>
+
+<footer class="footer">Hold any card to edit or delete · Saved locally on this device</footer>
+
+<!-- Modal -->
+<div class="modal-backdrop" id="modal-backdrop">
+  <div class="modal" id="modal" role="dialog" aria-modal="true">
+    <div class="modal-handle"></div>
+    <div class="modal-header">
+      <div class="modal-title" id="modal-title">New phrase</div>
+      <button class="modal-close" id="modal-close" aria-label="Close">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round">
+          <path d="M18 6 6 18M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+
+    <form id="phrase-form" autocomplete="off">
+      <div class="field">
+        <label class="field-label" for="phrase-input">Phrase</label>
+        <input type="text" id="phrase-input" placeholder="A word, a line, a quote…" required maxlength="200">
+      </div>
+
+      <div class="field">
+        <label class="field-label" for="meaning-input">Meaning</label>
+        <textarea id="meaning-input" placeholder="What does it mean to you?" maxlength="2000"></textarea>
+      </div>
+
+      <div class="field">
+        <label class="field-label">Tags</label>
+        <div class="tag-editor" id="tag-editor">
+          <input type="text" class="tag-input" id="tag-input" placeholder="Type and press enter…" maxlength="30">
+        </div>
+        <div class="tag-suggestions" id="tag-suggestions"></div>
+      </div>
+
+      <button type="submit" class="save-btn" id="save-btn">Save phrase</button>
+    </form>
+  </div>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+// ============================================================
+// Phrases — a personal lexicon
+// ============================================================
+
+// =======================================================================
+// 1. PASTE YOUR PHRASES HERE
+// Format: { text: "The Word", meaning: "The definition", tags: ["tag1", "tag2"] },
+// =======================================================================
+const MY_PHRASES = [
+  { text: "Sonder", meaning: "The realization that each passerby has a life as vivid and complex as your own.", tags: ["words", "emotion"] },
+  { text: "Petrichor", meaning: "The earthy scent produced when rain falls on dry soil.", tags: ["words", "nature"] },
+  { text: "Hiraeth", meaning: "A homesickness for a home you cannot return to, or that never was.", tags: ["emotion"] },
+  { text: "Lethologica", meaning: "The inability to remember a word or put your finger on the right name.", tags: ["words"] }
+];
+// =======================================================================
+
+
+const STORAGE_KEY = 'phrases.v2'; // Changed to v2 to force reload your MY_PHRASES
+const SEED_FLAG   = 'phrases.seeded.v2';
+
+// ============ State ============
+const state = {
+  phrases: [],
+  search: '',
+  activeTag: null,
+  editingId: null,
+  draftTags: [],
+  suppressClick: false
+};
+
+// ============ DOM refs ============
+const $ = (sel) => document.querySelector(sel);
+const els = {
+  list:           $('#phrases-list'),
+  tagsFilter:     $('#tags-filter'),
+  searchInput:    $('#search-input'),
+  clearBtn:       $('#clear-btn'),
+  addBtn:         $('#add-btn'),
+  count:          $('#count-display'),
+  modal:           $('#modal-backdrop'),
+  modalTitle:      $('#modal-title'),
+  modalClose:      $('#modal-close'),
+  form:            $('#phrase-form'),
+  phraseInput:     $('#phrase-input'),
+  meaningInput:    $('#meaning-input'),
+  tagEditor:       $('#tag-editor'),
+  tagInput:        $('#tag-input'),
+  tagSuggestions:  $('#tag-suggestions'),
+  saveBtn:        $('#save-btn'),
+  toast:          $('#toast')
+};
+
+// ============ Storage ============
+function load() {
+  try {
+    const raw = localStorage.getItem(STORAGE_KEY);
+    state.phrases = raw ? JSON.parse(raw) : [];
+  } catch (e) {
+    console.warn('Load failed:', e);
+    state.phrases = [];
+  }
+}
+
+function save() {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state.phrases));
+  } catch (e) {
+    showToast('Storage full — could not save');
+  }
+}
+
+// ============ Utilities ============
+function uid() {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+}
+
+function getAllTags() {
+  const counts = {};
+  state.phrases.forEach(p => {
+    (p.tags || []).forEach(t => { counts[t] = (counts[t] || 0) + 1; });
+  });
+  return Object.entries(counts)
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .map(([tag, count]) => ({ tag, count }));
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }
+  )[c]);
+}
+
+let toastTimer = null;
+function showToast(msg) {
+  els.toast.textContent = msg;
+  els.toast.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => els.toast.classList.remove('show'), 2000);
+}
+
+// ============ Filtering ============
+function getFiltered() {
+  const q = state.search.toLowerCase().trim();
+  return state.phrases.filter(p => {
+    if (state.activeTag && !(p.tags || []).includes(state.activeTag)) return false;
+    if (!q) return true;
+    const hay = (
+      p.text + ' ' + (p.meaning || '') + ' ' + (p.tags || []).join(' ')
+    ).toLowerCase();
+    return hay.includes(q);
+  });
+}
+
+// ============ Render ============
+function render(animateCards = false) {
+  renderTags();
+  renderList(animateCards);
+  renderCount();
+}
+
+function renderCount() {
+  const n = state.phrases.length;
+  if (n === 0) els.count.textContent = 'No phrases';
+  else if (n === 1) els.count.textContent = '01 phrase';
+  else els.count.textContent = String(n).padStart(2, '0') + ' phrases';
+}
+
+function renderTags() {
+  const tags = getAllTags();
+  els.tagsFilter.innerHTML = '';
+
+  const all = document.createElement('button');
+  all.className = 'tag-chip' + (state.activeTag === null ? ' active' : '');
+  all.innerHTML = `All <span class="count">${state.phrases.length}</span>`;
+  all.onclick = () => { state.activeTag = null; render(false); };
+  els.tagsFilter.appendChild(all);
+
+  tags.forEach(({ tag, count }) => {
+    const b = document.createElement('button');
+    b.className = 'tag-chip' + (state.activeTag === tag ? ' active' : '');
+    b.innerHTML = `${escapeHtml(tag)} <span class="count">${count}</span>`;
+    b.onclick = () => {
+      state.activeTag = state.activeTag === tag ? null : tag;
+      render(false);
+    };
+    els.tagsFilter.appendChild(b);
+  });
+}
+
+function renderList(animate) {
+  const filtered = getFiltered();
+  els.list.innerHTML = '';
+
+  if (state.phrases.length === 0) {
+    els.list.innerHTML = `
+      <div class="empty-state">
+        <div class="icon">"</div>
+        <h3>A blank page, waiting.</h3>
+        <p>Tap the + to save your first phrase.</p>
+      </div>`;
+    return;
+  }
+
+  if (filtered.length === 0) {
+    els.list.innerHTML = `<div class="no-results">Nothing matches your search.</div>`;
+    return;
+  }
+
+  filtered.sort((a, b) => b.createdAt - a.createdAt);
+
+  filtered.forEach((p, i) => {
+    const card = document.createElement('article');
+    card.className = 'phrase-card' + (animate ? ' animate-in' : '');
+    card.dataset.id = p.id;
+    if (animate) card.style.animationDelay = (Math.min(i, 8) * 35) + 'ms';
+
+    card.innerHTML = `
+      <div class="phrase-text">${escapeHtml(p.text)}</div>
+      ${p.meaning ? `<div class="phrase-meaning">${escapeHtml(p.meaning)}</div>` : ''}
+      ${(p.tags || []).length ? `
+        <div class="phrase-tags">
+          ${p.tags.map(t => `<span class="phrase-tag">${escapeHtml(t)}</span>`).join('')}
+        </div>` : ''
+      }
+      <div class="card-actions">
+        <button class="action-btn edit" data-action="edit" aria-label="Edit phrase">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z"/>
+          </svg>
+        </button>
+        <button class="action-btn delete" data-action="delete" aria-label="Delete phrase">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/>
+            <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+            <line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/>
+          </svg>
+        </button>
+      </div>
+      <div class="press-indicator"></div>
+    `;
+
+    attachCardHandlers(card, p);
+    els.list.appendChild(card);
+  });
+}
+
+// ============ Press-and-hold ============
+function attachCardHandlers(card, phrase) {
+  let pressTimer = null;
+  let pressing = false;
+  let longPressed = false;
+  let startX = 0, startY = 0;
+  const MOVE_THRESHOLD = 10;
+
+  function start(e) {
+    if (e.target.closest('.action-btn')) return;
+    pressing = true;
+    longPressed = false;
+    const t = e.touches ? e.touches[0] : e;
+    startX = t.clientX;
+    startY = t.clientY;
+    card.classList.add('pressing');
+
+    pressTimer = setTimeout(() => {
+      document.querySelectorAll('.phrase-card.revealed').forEach(c => {
+        if (c !== card) c.classList.remove('revealed');
+      });
+      card.classList.add('revealed');
+      card.classList.remove('pressing');
+      pressing = false;
+      longPressed = true;
+      if (navigator.vibrate) navigator.vibrate(12);
+      state.suppressClick = true;
+      setTimeout(() => { state.suppressClick = false; }, 60);
+    }, 480);
+  }
+
+  function move(e) {
+    if (!pressing) return;
+    const t = e.touches ? e.touches[0] : e;
+    if (Math.abs(t.clientX - startX) > MOVE_THRESHOLD ||
+        Math.abs(t.clientY - startY) > MOVE_THRESHOLD) {
+      cancel();
+    }
+  }
+
+  function cancel() {
+    clearTimeout(pressTimer);
+    card.classList.remove('pressing');
+    pressing = false;
+  }
+
+  function end() {
+    clearTimeout(pressTimer);
+    card.classList.remove('pressing');
+    if (!longPressed && pressing && card.classList.contains('revealed')) {
+      card.classList.remove('revealed');
+    }
+    pressing = false;
+  }
+
+  card.addEventListener('touchstart',  start, { passive: true });
+  card.addEventListener('touchmove',  move,  { passive: true });
+  card.addEventListener('touchend',   end);
+  card.addEventListener('touchcancel', cancel);
+  card.addEventListener('mousedown',   start);
+  card.addEventListener('mousemove',   move);
+  card.addEventListener('mouseup',     end);
+  card.addEventListener('mouseleave',   end);
+
+  card.querySelector('[data-action="edit"]').addEventListener('click', (e) => {
+    e.stopPropagation();
+    openModal(phrase.id);
+  });
+  card.querySelector('[data-action="delete"]').addEventListener('click', (e) => {
+    e.stopPropagation();
+    deletePhrase(phrase.id);
+  });
+}
+
+document.addEventListener('click', (e) => {
+  if (state.suppressClick) return;
+  if (e.target.closest('.action-btn')) return;
+  const card = e.target.closest('.phrase-card');
+  if (card && card.classList.contains('revealed')) return;
+  document.querySelectorAll('.phrase-card.revealed').forEach(c => c.classList.remove('revealed'));
+});
+
+// ============ Modal ============
+function openModal(id = null) {
+  document.querySelectorAll('.phrase-card.revealed').forEach(c => c.classList.remove('revealed'));
+
+  state.editingId = id;
+  state.draftTags = [];
+
+  if (id) {
+    const p = state.phrases.find(x => x.id === id);
+    if (!p) return;
+    els.modalTitle.textContent = 'Edit phrase';
+    els.phraseInput.value = p.text;
+    els.meaningInput.value = p.meaning || '';
+    state.draftTags = [...(p.tags || [])];
+    els.saveBtn.textContent = 'Update phrase';
+  } else {
+    els.modalTitle.textContent = 'New phrase';
+    els.form.reset();
+    els.saveBtn.textContent = 'Save phrase';
+  }
+
+  renderTagEditor();
+  renderSuggestions();
+  els.modal.classList.add('open');
+  document.body.style.overflow = 'hidden';
+  setTimeout(() => els.phraseInput.focus(), 280);
+}
+
+function closeModal() {
+  els.modal.classList.remove('open');
+  document.body.style.overflow = '';
+  state.editingId = null;
+  state.draftTags = [];
+}
+
+// ============ Tag editor ============
+function renderTagEditor() {
+  [...els.tagEditor.children].forEach(c => {
+    if (c !== els.tagInput) c.remove();
+  });
+  state.draftTags.forEach(tag => {
+    const pill = document.createElement('span');
+    pill.className = 'tag-pill';
+    pill.innerHTML = `${escapeHtml(tag)}<button type="button" class="remove" aria-label="Remove ${escapeHtml(tag)}">×</button>`;
+    pill.querySelector('.remove').onclick = () => {
+      state.draftTags = state.draftTags.filter(t => t !== tag);
+      renderTagEditor();
+      renderSuggestions();
+    };
+    els.tagEditor.insertBefore(pill, els.tagInput);
+  });
+}
+
+function renderSuggestions() {
+  const all = getAllTags().map(t => t.tag);
+  const available = all.filter(t => !state.draftTags.includes(t)).slice(0, 8);
+  els.tagSuggestions.innerHTML = '';
+  if (available.length === 0) {
+    els.tagSuggestions.style.display = 'none';
+    return;
+  }
+  els.tagSuggestions.style.display = 'flex';
+  available.forEach(tag => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'tag-suggestion';
+    b.textContent = '+ ' + tag;
+    b.onclick = () => {
+      if (!state.draftTags.includes(tag)) {
+        state.draftTags.push(tag);
+        renderTagEditor();
+        renderSuggestions();
+      }
+    };
+    els.tagSuggestions.appendChild(b);
+  });
+}
+
+function addTagFromInput() {
+  let v = els.tagInput.value.trim();
+  v = v.replace(/,+$/, '').trim();
+  if (!v) return;
+  if (v.length > 30) v = v.slice(0, 30);
+  if (!state.draftTags.includes(v)) {
+    state.draftTags.push(v);
+    renderTagEditor();
+    renderSuggestions();
+  }
+  els.tagInput.value = '';
+}
+
+els.tagInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' || e.key === ',' || e.key === 'Tab') {
+    if (els.tagInput.value.trim()) {
+      e.preventDefault();
+      addTagFromInput();
+    }
+  } else if (e.key === 'Backspace' && !els.tagInput.value && state.draftTags.length) {
+    state.draftTags.pop();
+    renderTagEditor();
+    renderSuggestions();
+  }
+});
+
+els.tagEditor.addEventListener('click', (e) => {
+  if (e.target === els.tagEditor) els.tagInput.focus();
+});
+
+// ============ CRUD ============
+function savePhrase(e) {
+  e.preventDefault();
+  if (els.tagInput.value.trim()) addTagFromInput();
+
+  const text = els.phraseInput.value.trim();
+  const meaning = els.meaningInput.value.trim();
+  if (!text) { els.phraseInput.focus(); return; }
+
+  if (state.editingId) {
+    const p = state.phrases.find(x => x.id === state.editingId);
+    if (p) {
+      p.text = text;
+      p.meaning = meaning;
+      p.tags = [...state.draftTags];
+    }
+    showToast('Phrase updated');
+  } else {
+    state.phrases.unshift({
+      id: uid(),
+      text,
+      meaning,
+      tags: [...state.draftTags],
+      createdAt: Date.now()
+    });
+    showToast('Phrase saved');
+  }
+
+  save();
+  render(true);
+  closeModal();
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+function deletePhrase(id) {
+  state.phrases = state.phrases.filter(p => p.id !== id);
+  save();
+  render(false);
+  showToast('Phrase deleted');
+}
+
+// ============ Event wiring ============
+els.addBtn.addEventListener('click', () => openModal());
+els.modalClose.addEventListener('click', closeModal);
+els.modal.addEventListener('click', (e) => {
+  if (e.target === els.modal) closeModal();
+});
+els.form.addEventListener('submit', savePhrase);
+
+els.searchInput.addEventListener('input', (e) => {
+  state.search = e.target.value;
+  els.clearBtn.style.display = state.search ? 'flex' : 'none';
+  renderList(false);
+});
+
+els.clearBtn.addEventListener('click', () => {
+  els.searchInput.value = '';
+  state.search = '';
+  els.clearBtn.style.display = 'none';
+  renderList(false);
+  els.searchInput.focus();
+});
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && els.modal.classList.contains('open')) closeModal();
+});
+
+// ============ First-run seed ============
+// Loads the phrases you pasted into MY_PHRASES at the top of this file
+function maybeSeed() {
+  if (localStorage.getItem(SEED_FLAG)) return;
+  
+  const now = Date.now();
+  state.phrases = MY_PHRASES.map((p, index) => ({
+    id: uid(),
+    text: p.text,
+    meaning: p.meaning || '',
+    tags: p.tags || [],
+    createdAt: now - index // makes them sort in the order you pasted them
+  }));
+  
+  save();
+  localStorage.setItem(SEED_FLAG, '1');
+}
+
+// ============ Init ============
+load();
+maybeSeed();
+render(true);
+</script>
+</body>
+  </html>
