@@ -963,7 +963,10 @@ const state = {
   editingId: null,
   draftTags: [],
   suppressClick: false,
-  isSyncing: false
+  isSyncing: false,
+  selectionMode: false,
+  selectedIds: [],
+  pinnedTags: []
 };
 
 // ============ DOM refs ============
@@ -971,9 +974,11 @@ const $ = (sel) => document.querySelector(sel);
 const els = {
   list:           $('#phrases-list'),
   tagsFilter:     $('#tags-filter'),
+  pinnedTagsFilter: $('#pinned-tags-filter'),
   searchInput:    $('#search-input'),
   clearBtn:       $('#clear-btn'),
   addBtn:         $('#add-btn'),
+  selectBtn:      $('#select-btn'),
   count:          $('#count-display'),
   syncIndicator: $('#sync-indicator'),
   modal:           $('#modal-backdrop'),
@@ -986,9 +991,12 @@ const els = {
   tagInput:        $('#tag-input'),
   tagSuggestions:  $('#tag-suggestions'),
   saveBtn:        $('#save-btn'),
-  toast:          $('#toast')
+  toast:          $('#toast'),
+  selectionBar:   $('#selection-bar'),
+  selCount:       $('#sel-count'),
+  btnDeleteSelected: $('#btn-delete-selected'),
+  btnCancelSelection: $('#btn-cancel-selection')
 };
-
 // ============ Sync Indicator ============
 function setSyncStatus(status) {
   els.syncIndicator.classList.remove('syncing', 'error');
@@ -1060,10 +1068,14 @@ function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 }
 
-function getAllTags() {
+function getAllTags(includePinned = false) {
   const counts = {};
   state.phrases.forEach(p => {
-    (p.tags || []).forEach(t => { counts[t] = (counts[t] || 0) + 1; });
+    (p.tags || []).forEach(t => {
+      if (includePinned || !state.pinnedTags.includes(t)) {
+        counts[t] = (counts[t] || 0) + 1;
+      }
+    });
   });
   return Object.entries(counts)
     .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
@@ -1100,6 +1112,7 @@ function getFiltered() {
 // ============ Render ============
 function render(animateCards = false) {
   renderTags();
+  renderPinnedTags();
   renderList(animateCards);
   renderCount();
 }
@@ -1112,7 +1125,7 @@ function renderCount() {
 }
 
 function renderTags() {
-  const tags = getAllTags();
+  const tags = getAllTags(false); // exclude pinned from main list
   els.tagsFilter.innerHTML = '';
 
   const all = document.createElement('button');
@@ -1124,13 +1137,115 @@ function renderTags() {
   tags.forEach(({ tag, count }) => {
     const b = document.createElement('button');
     b.className = 'tag-chip' + (state.activeTag === tag ? ' active' : '');
-    b.innerHTML = `${escapeHtml(tag)} <span class="count">${count}</span>`;
+    b.innerHTML = `${escapeHtml(tag)} <span class="count">${count}</span> <span class="tag-action pin">📌</span> <span class="tag-action delete">✕</span>`;
     b.onclick = () => {
-      state.activeTag = state.activeTag === tag ? null : tag;
-      render(false);
+      if (!b.classList.contains('editing')) {
+        state.activeTag = state.activeTag === tag ? null : tag;
+        render(false);
+      }
     };
+    attachTagHoldHandlers(b, tag, false);
     els.tagsFilter.appendChild(b);
   });
+}
+
+function renderPinnedTags() {
+  els.pinnedTagsFilter.innerHTML = '';
+  if (state.pinnedTags.length === 0) {
+    els.pinnedTagsFilter.style.display = 'none';
+    return;
+  }
+  els.pinnedTagsFilter.style.display = 'flex';
+  
+  state.pinnedTags.forEach(tag => {
+    const b = document.createElement('button');
+    b.className = 'tag-chip pinned' + (state.activeTag === tag ? ' active' : '');
+    const count = state.phrases.filter(p => (p.tags || []).includes(tag)).length;
+    b.innerHTML = `${escapeHtml(tag)} <span class="count">${count}</span> <span class="tag-action unpin">Unpin</span> <span class="tag-action delete">✕</span>`;
+    b.onclick = () => {
+      if (!b.classList.contains('editing')) {
+        state.activeTag = state.activeTag === tag ? null : tag;
+        render(false);
+      }
+    };
+    attachTagHoldHandlers(b, tag, true);
+    els.pinnedTagsFilter.appendChild(b);
+  });
+}
+
+function attachTagHoldHandlers(btn, tag, isPinned) {
+  let pressTimer = null;
+  let isHolding = false;
+
+  const start = () => {
+    isHolding = true;
+    document.querySelectorAll('.tag-chip.editing').forEach(c => {
+      if (c !== btn) c.classList.remove('editing');
+    });
+    pressTimer = setTimeout(() => {
+      btn.classList.add('editing');
+      isHolding = false;
+      if (navigator.vibrate) navigator.vibrate(10);
+      state.suppressClick = true;
+      setTimeout(() => { state.suppressClick = false; }, 100);
+    }, 480);
+  };
+
+  const move = () => { clearTimeout(pressTimer); isHolding = false; };
+  const end = () => { clearTimeout(pressTimer); };
+
+  btn.addEventListener('touchstart', start, { passive: true });
+  btn.addEventListener('touchmove', move, { passive: true });
+  btn.addEventListener('touchend', end);
+  btn.addEventListener('mousedown', start);
+  btn.addEventListener('mousemove', move);
+  btn.addEventListener('mouseup', end);
+  btn.addEventListener('mouseleave', end);
+
+  const pinAction = btn.querySelector(isPinned ? '.unpin' : '.pin');
+  const delAction = btn.querySelector('.delete');
+
+  if (pinAction) {
+    pinAction.onclick = (e) => {
+      e.stopPropagation();
+      if (isPinned) {
+        state.pinnedTags = state.pinnedTags.filter(t => t !== tag);
+      } else {
+        state.pinnedTags.push(tag);
+      }
+      savePinnedTags();
+      render(false);
+    };
+  }
+
+  if (delAction) {
+    delAction.onclick = (e) => {
+      e.stopPropagation();
+      deleteTagFromAllCards(tag);
+      if (isPinned) {
+        state.pinnedTags = state.pinnedTags.filter(t => t !== tag);
+        savePinnedTags();
+      }
+      render(false);
+    };
+  }
+}
+
+async function deleteTagFromAllCards(tag) {
+  state.phrases.forEach(p => {
+    if (p.tags) p.tags = p.tags.filter(t => t !== tag);
+  });
+  showToast('Deleting tag from cloud...');
+  await saveToCloud();
+}
+
+function savePinnedTags() {
+  localStorage.setItem('phrases.pinnedTags', JSON.stringify(state.pinnedTags));
+}
+
+function loadPinnedTags() {
+  const raw = localStorage.getItem('phrases.pinnedTags');
+  state.pinnedTags = raw ? JSON.parse(raw) : [];
 }
 
 function renderList(animate) {
@@ -1157,10 +1272,15 @@ function renderList(animate) {
   filtered.forEach((p, i) => {
     const card = document.createElement('article');
     card.className = 'phrase-card' + (animate ? ' animate-in' : '');
+    if (state.selectionMode) card.classList.add('selectable');
+    if (state.selectedIds.includes(p.id)) card.classList.add('selected');
     card.dataset.id = p.id;
     if (animate) card.style.animationDelay = (Math.min(i, 8) * 35) + 'ms';
 
     card.innerHTML = `
+      <div class="card-checkbox">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+      </div>
       <div class="phrase-text">${escapeHtml(p.text)}</div>
       ${p.meaning ? `<div class="phrase-meaning">${escapeHtml(p.meaning)}</div>` : ''}
       ${(p.tags || []).length ? `
@@ -1168,6 +1288,7 @@ function renderList(animate) {
           ${p.tags.map(t => `<span class="phrase-tag">${escapeHtml(t)}</span>`).join('')}
         </div>` : ''
       }
+      ${!state.selectionMode ? `
       <div class="card-actions">
         <button class="action-btn edit" data-action="edit" aria-label="Edit phrase">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -1183,12 +1304,136 @@ function renderList(animate) {
         </button>
       </div>
       <div class="press-indicator"></div>
+      ` : ''}
     `;
 
     attachCardHandlers(card, p);
     els.list.appendChild(card);
   });
 }
+
+// ============ Press-and-hold & Selection ============
+function attachCardHandlers(card, phrase) {
+  // Selection Mode Click
+  card.addEventListener('click', (e) => {
+    if (state.selectionMode) {
+      e.stopPropagation();
+      toggleSelection(phrase.id);
+    }
+  });
+
+  if (state.selectionMode) return; // Skip hold logic if just selecting
+
+  let pressTimer = null;
+  let pressing = false;
+  let longPressed = false;
+  let startX = 0, startY = 0;
+  const MOVE_THRESHOLD = 10;
+
+  function start(e) {
+    if (e.target.closest('.action-btn')) return;
+    pressing = true;
+    longPressed = false;
+    const t = e.touches ? e.touches[0] : e;
+    startX = t.clientX;
+    startY = t.clientY;
+    card.classList.add('pressing');
+
+    pressTimer = setTimeout(() => {
+      document.querySelectorAll('.phrase-card.revealed').forEach(c => {
+        if (c !== card) c.classList.remove('revealed');
+      });
+      card.classList.add('revealed');
+      card.classList.remove('pressing');
+      pressing = false;
+      longPressed = true;
+      if (navigator.vibrate) navigator.vibrate(12);
+      state.suppressClick = true;
+      setTimeout(() => { state.suppressClick = false; }, 60);
+    }, 480);
+  }
+
+  function move(e) {
+    if (!pressing) return;
+    const t = e.touches ? e.touches[0] : e;
+    if (Math.abs(t.clientX - startX) > MOVE_THRESHOLD ||
+        Math.abs(t.clientY - startY) > MOVE_THRESHOLD) {
+      cancel();
+    }
+  }
+
+  function cancel() {
+    clearTimeout(pressTimer);
+    card.classList.remove('pressing');
+    pressing = false;
+  }
+
+  function end() {
+    clearTimeout(pressTimer);
+    card.classList.remove('pressing');
+    if (!longPressed && pressing && card.classList.contains('revealed')) {
+      card.classList.remove('revealed');
+    }
+    pressing = false;
+  }
+
+  card.addEventListener('touchstart',  start, { passive: true });
+  card.addEventListener('touchmove',  move,  { passive: true });
+  card.addEventListener('touchend',   end);
+  card.addEventListener('touchcancel', cancel);
+  card.addEventListener('mousedown',   start);
+  card.addEventListener('mousemove',   move);
+  card.addEventListener('mouseup',     end);
+  card.addEventListener('mouseleave',   end);
+
+  const editBtn = card.querySelector('[data-action="edit"]');
+  const delBtn = card.querySelector('[data-action="delete"]');
+  if (editBtn) editBtn.addEventListener('click', (e) => { e.stopPropagation(); openModal(phrase.id); });
+  if (delBtn) delBtn.addEventListener('click', (e) => { e.stopPropagation(); deletePhrase(phrase.id); });
+}
+
+function toggleSelection(id) {
+  if (state.selectedIds.includes(id)) {
+    state.selectedIds = state.selectedIds.filter(i => i !== id);
+  } else {
+    state.selectedIds.push(id);
+  }
+  updateSelectionUI();
+  renderList(false);
+}
+
+function updateSelectionUI() {
+  els.selCount.textContent = `${state.selectedIds.length} selected`;
+  if (state.selectedIds.length > 0) {
+    els.selectionBar.classList.add('show');
+  } else {
+    els.selectionBar.classList.remove('show');
+  }
+}
+
+function toggleSelectionMode() {
+  state.selectionMode = !state.selectionMode;
+  if (state.selectionMode) {
+    els.selectBtn.classList.add('active');
+    els.selectBtn.textContent = 'Done';
+    state.selectedIds = [];
+  } else {
+    els.selectBtn.classList.remove('active');
+    els.selectBtn.textContent = 'Select';
+    state.selectedIds = [];
+    els.selectionBar.classList.remove('show');
+  }
+  render(false);
+}
+
+async function deleteSelected() {
+  const count = state.selectedIds.length;
+  state.phrases = state.phrases.filter(p => !state.selectedIds.includes(p.id));
+  state.selectedIds = [];
+  toggleSelectionMode();
+  showToast(`Deleting ${count} phrases from cloud...`);
+  await saveToCloud();
+  }
 
 // ============ Press-and-hold ============
 function attachCardHandlers(card, phrase) {
