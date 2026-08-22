@@ -101,6 +101,24 @@ input, textarea { font-family: inherit; }
   letter-spacing: 0.12em;
   text-transform: uppercase;
   font-feature-settings: 'tnum';
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sync-indicator {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #10b981; /* green for synced */
+  transition: background 0.3s var(--ease);
+}
+.sync-indicator.syncing { background: #f59e0b; animation: syncPulse 1s var(--ease) infinite; }
+.sync-indicator.error { background: #ef4444; }
+
+@keyframes syncPulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.3; transform: scale(0.6); }
 }
 
 /* ============ Search row ============ */
@@ -729,7 +747,10 @@ input, textarea { font-family: inherit; }
 <div class="app">
   <header class="header">
     <div class="brand">Phrases<span class="brand-dot"></span></div>
-    <div class="brand-count" id="count-display">No phrases</div>
+    <div class="brand-count">
+      <span class="sync-indicator" id="sync-indicator"></span>
+      <span id="count-display">Loading...</span>
+    </div>
   </header>
 
   <div class="search-row">
@@ -754,10 +775,16 @@ input, textarea { font-family: inherit; }
 
   <div class="tags-filter" id="tags-filter"></div>
 
-  <main class="phrases" id="phrases-list"></main>
+  <main class="phrases" id="phrases-list">
+    <div class="empty-state">
+      <div class="icon">"</div>
+      <h3>Loading cloud...</h3>
+      <p>Fetching your phrases.</p>
+    </div>
+  </main>
 </div>
 
-<footer class="footer">Hold any card to edit or delete · Saved locally on this device</footer>
+<footer class="footer">Hold any card to edit or delete · Synced via JSONBin</footer>
 
 <!-- Modal -->
 <div class="modal-backdrop" id="modal-backdrop">
@@ -800,24 +827,18 @@ input, textarea { font-family: inherit; }
 
 <script>
 // ============================================================
-// Phrases — a personal lexicon
+// Phrases — a personal lexicon (JSONBin.io Cloud Edition)
 // ============================================================
 
 // =======================================================================
-// 1. PASTE YOUR PHRASES HERE
-// Format: { text: "The Word", meaning: "The definition", tags: ["tag1", "tag2"] },
+// 1. JSONBIN.IO CONFIGURATION
+// Paste your Bin ID and API Key (X-Master-Key) below.
 // =======================================================================
-const MY_PHRASES = [
-  { text: "Sonder", meaning: "The realization that each passerby has a life as vivid and complex as your own.", tags: ["words", "emotion"] },
-  { text: "Petrichor", meaning: "The earthy scent produced when rain falls on dry soil.", tags: ["words", "nature"] },
-  { text: "Hiraeth", meaning: "A homesickness for a home you cannot return to, or that never was.", tags: ["emotion"] },
-  { text: "Lethologica", meaning: "The inability to remember a word or put your finger on the right name.", tags: ["words"] }
-];
+const JSONBIN_BIN_ID = "6a89e35cf5f4af5e29361a4b"; // e.g., "6770abc123def456..."
+const JSONBIN_API_KEY = "$2a$10$L0fsuyD5N.QZur7p94vrd.MUgYSsBM3e85EwILBEzY8B0FMSOrWIO"; // e.g., "$2a$10$OexampleKeyHere..."
 // =======================================================================
 
-
-const STORAGE_KEY = 'phrases.v2'; // Changed to v2 to force reload your MY_PHRASES
-const SEED_FLAG   = 'phrases.seeded.v2';
+const STORAGE_KEY = 'phrases.local.cache'; // Used only as an offline fallback
 
 // ============ State ============
 const state = {
@@ -826,7 +847,8 @@ const state = {
   activeTag: null,
   editingId: null,
   draftTags: [],
-  suppressClick: false
+  suppressClick: false,
+  isSyncing: false
 };
 
 // ============ DOM refs ============
@@ -838,6 +860,7 @@ const els = {
   clearBtn:       $('#clear-btn'),
   addBtn:         $('#add-btn'),
   count:          $('#count-display'),
+  syncIndicator: $('#sync-indicator'),
   modal:           $('#modal-backdrop'),
   modalTitle:      $('#modal-title'),
   modalClose:      $('#modal-close'),
@@ -851,22 +874,69 @@ const els = {
   toast:          $('#toast')
 };
 
-// ============ Storage ============
-function load() {
+// ============ Sync Indicator ============
+function setSyncStatus(status) {
+  els.syncIndicator.classList.remove('syncing', 'error');
+  if (status === 'syncing') els.syncIndicator.classList.add('syncing');
+  if (status === 'error') els.syncIndicator.classList.add('error');
+}
+
+// ============ Cloud Storage (JSONBin) ============
+async function loadFromCloud() {
+  setSyncStatus('syncing');
   try {
+    const url = `https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}/latest`;
+    const response = await fetch(url, {
+      method: 'GET',
+      headers: { 'X-Master-Key': JSONBIN_API_KEY }
+    });
+    
+    if (!response.ok) throw new Error('Network response was not ok');
+    
+    const data = await response.json();
+    // JSONBin wraps your data inside a "record" object
+    state.phrases = data.record && data.record.phrases ? data.record.phrases : [];
+    
+    // Save to local storage as a fallback for offline use
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state.phrases));
+    setSyncStatus('synced');
+    return true;
+  } catch (e) {
+    console.warn('Cloud load failed, trying local cache:', e);
+    setSyncStatus('error');
+    
+    // Fallback to local cache if offline
     const raw = localStorage.getItem(STORAGE_KEY);
     state.phrases = raw ? JSON.parse(raw) : [];
-  } catch (e) {
-    console.warn('Load failed:', e);
-    state.phrases = [];
+    showToast('Offline: Showing last saved phrases');
+    return false;
   }
 }
 
-function save() {
+async function saveToCloud() {
+  setSyncStatus('syncing');
   try {
+    const url = `https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}`;
+    const response = await fetch(url, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Master-Key': JSONBIN_API_KEY
+      },
+      body: JSON.stringify({ status: "active", phrases: state.phrases })
+    });
+
+    if (!response.ok) throw new Error('Save failed');
+    
+    // Update local cache on success
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state.phrases));
+    setSyncStatus('synced');
+    return true;
   } catch (e) {
-    showToast('Storage full — could not save');
+    console.warn('Cloud save failed:', e);
+    setSyncStatus('error');
+    showToast('Offline: Saved locally, will sync later');
+    return false;
   }
 }
 
@@ -1196,7 +1266,7 @@ els.tagEditor.addEventListener('click', (e) => {
 });
 
 // ============ CRUD ============
-function savePhrase(e) {
+async function savePhrase(e) {
   e.preventDefault();
   if (els.tagInput.value.trim()) addTagFromInput();
 
@@ -1211,7 +1281,7 @@ function savePhrase(e) {
       p.meaning = meaning;
       p.tags = [...state.draftTags];
     }
-    showToast('Phrase updated');
+    showToast('Updating cloud...');
   } else {
     state.phrases.unshift({
       id: uid(),
@@ -1220,20 +1290,21 @@ function savePhrase(e) {
       tags: [...state.draftTags],
       createdAt: Date.now()
     });
-    showToast('Phrase saved');
+    showToast('Saving to cloud...');
   }
 
-  save();
-  render(true);
+  render(false);
   closeModal();
-  window.scrollTo({ top: 0, behavior: 'smooth' });
+
+  // Save to cloud in the background
+  await saveToCloud();
 }
 
-function deletePhrase(id) {
+async function deletePhrase(id) {
   state.phrases = state.phrases.filter(p => p.id !== id);
-  save();
   render(false);
-  showToast('Phrase deleted');
+  showToast('Deleting from cloud...');
+  await saveToCloud();
 }
 
 // ============ Event wiring ============
@@ -1262,28 +1333,13 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && els.modal.classList.contains('open')) closeModal();
 });
 
-// ============ First-run seed ============
-// Loads the phrases you pasted into MY_PHRASES at the top of this file
-function maybeSeed() {
-  if (localStorage.getItem(SEED_FLAG)) return;
-  
-  const now = Date.now();
-  state.phrases = MY_PHRASES.map((p, index) => ({
-    id: uid(),
-    text: p.text,
-    meaning: p.meaning || '',
-    tags: p.tags || [],
-    createdAt: now - index // makes them sort in the order you pasted them
-  }));
-  
-  save();
-  localStorage.setItem(SEED_FLAG, '1');
+// ============ Init ============
+async function init() {
+  await loadFromCloud();
+  render(true);
 }
 
-// ============ Init ============
-load();
-maybeSeed();
-render(true);
+init();
 </script>
 </body>
-  </html>
+            </html>
