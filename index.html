@@ -893,7 +893,13 @@ input, textarea { font-family: inherit; }
   </main>
 </div>
 
-<footer class="footer">Hold any card to edit or delete · Synced via JSONBin</footer>
+<div class="selection-bar" id="selection-bar">
+  <div class="sel-count" id="sel-count">0 selected</div>
+  <button class="btn-delete" id="btn-delete-selected">Delete</button>
+  <button class="btn-cancel" id="btn-cancel-selection">Cancel</button>
+</div>
+
+<footer class="footer">Hold any card to edit or delete</footer>
 
 <!-- Modal -->
 <div class="modal-backdrop" id="modal-backdrop">
