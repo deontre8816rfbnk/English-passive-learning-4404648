@@ -368,8 +368,7 @@ function renderList(animate) {
     return;
   }
 
-  filtered.sort((a, b) => b.createdAt - a.createdAt);
-
+  // Loop through and create cards
   filtered.forEach((p, i) => {
     const card = document.createElement('article');
     card.className = 'phrase-card' + (animate ? ' animate-in' : '');
@@ -387,7 +386,6 @@ function renderList(animate) {
     let actionsHTML = '';
     
     if (state.selectionMode) {
-      // In selection mode, show a delete button ONLY if the card is selected
       if (state.selectedIds.includes(p.id)) {
         actionsHTML = `
           <button class="selection-delete-btn" aria-label="Delete selected">
@@ -398,7 +396,6 @@ function renderList(animate) {
         `;
       }
     } else {
-      // Normal mode: show edit/delete/select on press and hold
       actionsHTML = `
         <div class="card-actions">
           <button class="action-btn select" data-action="select" aria-label="Select phrase">
@@ -434,8 +431,9 @@ function renderList(animate) {
 
     attachCardHandlers(card, p);
     els.list.appendChild(card);
-    
-  // Add a message if showing random cards
+  });
+
+  // Add the "Refresh" message ONLY ONCE after all cards are done
   if (state.activeTags.length === 0 && state.search === '' && state.phrases.length > 20) {
     const msg = document.createElement('div');
     msg.className = 'no-results';
@@ -443,12 +441,11 @@ function renderList(animate) {
     msg.style.fontStyle = 'normal';
     msg.style.fontFamily = 'var(--sans)';
     msg.style.color = 'var(--text-faint)';
+    msg.style.marginTop = '20px';
     msg.innerHTML = `Showing 20 random phrases out of ${state.phrases.length}.<br>Refresh the page to discover more.`;
     els.list.appendChild(msg);
   }
-  });
 }
-
 // ============ Press-and-hold & Selection ============
 function attachCardHandlers(card, phrase) {
   
