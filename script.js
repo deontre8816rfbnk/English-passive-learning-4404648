@@ -16,7 +16,7 @@ const STORAGE_KEY = 'phrases.local.cache';
 const state = {
   phrases: [],
   search: '',
-  activeTag: null,
+  activeTags: [], // Array to support multiple tags
   editingId: null,
   draftTags: [],
   suppressClick: false,
@@ -152,14 +152,32 @@ function showToast(msg) {
 // ============ Filtering ============
 function getFiltered() {
   const q = state.search.toLowerCase().trim();
-  return state.phrases.filter(p => {
-    if (state.activeTag && !(p.tags || []).includes(state.activeTag)) return false;
+  let filtered = state.phrases.filter(p => {
+    // If tags are selected, check if the card has ANY of the selected tags
+    if (state.activeTags.length > 0) {
+      const hasTag = (p.tags || []).some(t => state.activeTags.includes(t));
+      if (!hasTag) return false;
+    }
     if (!q) return true;
-    const hay = (
-      p.text + ' ' + (p.meaning || '') + ' ' + (p.tags || []).join(' ')
-    ).toLowerCase();
+    const hay = (p.text + ' ' + (p.meaning || '') + ' ' + (p.tags || []).join(' ')).toLowerCase();
     return hay.includes(q);
   });
+
+  // RANDOM FEED LOGIC
+  // If no tags are selected AND no search is active, pick 20 random cards
+  if (state.activeTags.length === 0 && q === '') {
+    // Fisher-Yates shuffle for randomness
+    for (let i = filtered.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [filtered[i], filtered[j]] = [filtered[j], filtered[i]];
+    }
+    filtered = filtered.slice(0, 20); // Show only 20
+  } else {
+    // Otherwise, sort by date
+    filtered.sort((a, b) => b.createdAt - a.createdAt);
+  }
+
+  return filtered;
 }
 
 // ============ Render ============
@@ -182,14 +200,16 @@ function renderTags() {
   els.tagsFilter.innerHTML = '';
 
   const all = document.createElement('button');
-  all.className = 'tag-chip' + (state.activeTag === null ? ' active' : '');
+  // "All" is active only if NO tags are selected
+  all.className = 'tag-chip' + (state.activeTags.length === 0 ? ' active' : '');
   all.innerHTML = `All <span class="count">${state.phrases.length}</span>`;
-  all.onclick = () => { state.activeTag = null; render(false); };
+  all.onclick = () => { state.activeTags = []; render(false); };
   els.tagsFilter.appendChild(all);
 
   tags.forEach(({ tag, count }) => {
     const b = document.createElement('button');
-    b.className = 'tag-chip' + (state.activeTag === tag ? ' active' : '');
+    // Check if this specific tag is in the activeTags array
+    b.className = 'tag-chip' + (state.activeTags.includes(tag) ? ' active' : '');
     b.innerHTML = `
       ${escapeHtml(tag)} 
       <span class="count">${count}</span> 
@@ -202,7 +222,12 @@ function renderTags() {
     `;
     b.onclick = () => {
       if (!b.classList.contains('editing')) {
-        state.activeTag = state.activeTag === tag ? null : tag;
+        // Toggle tag selection
+        if (state.activeTags.includes(tag)) {
+          state.activeTags = state.activeTags.filter(t => t !== tag);
+        } else {
+          state.activeTags.push(tag);
+        }
         render(false);
       }
     };
@@ -221,7 +246,7 @@ function renderPinnedTags() {
   
   state.pinnedTags.forEach(tag => {
     const b = document.createElement('button');
-    b.className = 'tag-chip pinned' + (state.activeTag === tag ? ' active' : '');
+    b.className = 'tag-chip pinned' + (state.activeTags.includes(tag) ? ' active' : '');
     const count = state.phrases.filter(p => (p.tags || []).includes(tag)).length;
     b.innerHTML = `
       ${escapeHtml(tag)} 
@@ -235,7 +260,12 @@ function renderPinnedTags() {
     `;
     b.onclick = () => {
       if (!b.classList.contains('editing')) {
-        state.activeTag = state.activeTag === tag ? null : tag;
+        // Toggle pinned tag selection
+        if (state.activeTags.includes(tag)) {
+          state.activeTags = state.activeTags.filter(t => t !== tag);
+        } else {
+          state.activeTags.push(tag);
+        }
         render(false);
       }
     };
@@ -404,6 +434,18 @@ function renderList(animate) {
 
     attachCardHandlers(card, p);
     els.list.appendChild(card);
+    
+  // Add a message if showing random cards
+  if (state.activeTags.length === 0 && state.search === '' && state.phrases.length > 20) {
+    const msg = document.createElement('div');
+    msg.className = 'no-results';
+    msg.style.fontSize = '13px';
+    msg.style.fontStyle = 'normal';
+    msg.style.fontFamily = 'var(--sans)';
+    msg.style.color = 'var(--text-faint)';
+    msg.innerHTML = `Showing 20 random phrases out of ${state.phrases.length}.<br>Refresh the page to discover more.`;
+    els.list.appendChild(msg);
+  }
   });
 }
 
