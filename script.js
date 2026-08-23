@@ -6,8 +6,8 @@
 // 1. JSONBIN.IO CONFIGURATION
 // Paste your Bin ID and API Key (X-Master-Key) below.
 // =======================================================================
-const JSONBIN_BIN_ID = "6a89e35cf5f4af5e29361a4b"; 
-const JSONBIN_API_KEY = "$2a$10$L0fsuyD5N.QZur7p94vrd.MUgYSsBM3e85EwILBEzY8B0FMSOrWIO"; 
+const JSONBIN_BIN_ID = "PASTE_YOUR_BIN_ID_HERE"; 
+const JSONBIN_API_KEY = "PASTE_YOUR_API_KEY_HERE"; 
 // =======================================================================
 
 const STORAGE_KEY = 'phrases.local.cache'; 
@@ -200,7 +200,6 @@ function renderTags() {
   els.tagsFilter.innerHTML = '';
 
   const all = document.createElement('button');
-  // "All" is active only if NO tags are selected
   all.className = 'tag-chip' + (state.activeTags.length === 0 ? ' active' : '');
   all.innerHTML = `All <span class="count">${state.phrases.length}</span>`;
   all.onclick = () => { state.activeTags = []; render(false); };
@@ -208,7 +207,6 @@ function renderTags() {
 
   tags.forEach(({ tag, count }) => {
     const b = document.createElement('button');
-    // Check if this specific tag is in the activeTags array
     b.className = 'tag-chip' + (state.activeTags.includes(tag) ? ' active' : '');
     b.innerHTML = `
       ${escapeHtml(tag)} 
@@ -222,7 +220,6 @@ function renderTags() {
     `;
     b.onclick = () => {
       if (!b.classList.contains('editing')) {
-        // Toggle tag selection
         if (state.activeTags.includes(tag)) {
           state.activeTags = state.activeTags.filter(t => t !== tag);
         } else {
@@ -260,7 +257,6 @@ function renderPinnedTags() {
     `;
     b.onclick = () => {
       if (!b.classList.contains('editing')) {
-        // Toggle pinned tag selection
         if (state.activeTags.includes(tag)) {
           state.activeTags = state.activeTags.filter(t => t !== tag);
         } else {
@@ -368,7 +364,6 @@ function renderList(animate) {
     return;
   }
 
-  // Loop through and create cards
   filtered.forEach((p, i) => {
     const card = document.createElement('article');
     card.className = 'phrase-card' + (animate ? ' animate-in' : '');
@@ -431,7 +426,7 @@ function renderList(animate) {
 
     attachCardHandlers(card, p);
     els.list.appendChild(card);
-  });
+  }); // END of forEach loop
 
   // Add the "Refresh" message ONLY ONCE after all cards are done
   if (state.activeTags.length === 0 && state.search === '' && state.phrases.length > 20) {
@@ -445,26 +440,23 @@ function renderList(animate) {
     msg.innerHTML = `Showing 20 random phrases out of ${state.phrases.length}.<br>Refresh the page to discover more.`;
     els.list.appendChild(msg);
   }
-}
+} // END of renderList function
+
 // ============ Press-and-hold & Selection ============
 function attachCardHandlers(card, phrase) {
   
-  // SELECTION MODE CLICK LOGIC
   if (state.selectionMode) {
     card.addEventListener('click', (e) => {
-      // If clicking the delete button on a selected card, delete all selected
       if (e.target.closest('.selection-delete-btn')) {
         e.stopPropagation();
         deleteSelected();
         return;
       }
-      // Otherwise, toggle the selection of this card
       toggleSelection(phrase.id);
     });
-    return; // Skip normal hold logic when in selection mode
+    return;
   }
 
-  // NORMAL MODE HOLD LOGIC
   let pressTimer = null;
   let pressing = false;
   let longPressed = false;
@@ -527,7 +519,6 @@ function attachCardHandlers(card, phrase) {
   card.addEventListener('mouseup',     end);
   card.addEventListener('mouseleave',   end);
 
-  // ACTION BUTTON CLICKS
   const selectBtn = card.querySelector('[data-action="select"]');
   const editBtn = card.querySelector('[data-action="edit"]');
   const delBtn = card.querySelector('[data-action="delete"]');
@@ -555,7 +546,6 @@ function attachCardHandlers(card, phrase) {
 function toggleSelection(id) {
   if (state.selectedIds.includes(id)) {
     state.selectedIds = state.selectedIds.filter(i => i !== id);
-    // If we unselect the last card, exit selection mode
     if (state.selectedIds.length === 0) {
       toggleSelectionMode();
       return;
@@ -670,7 +660,7 @@ function renderTagEditor() {
 }
 
 function renderSuggestions() {
-  const all = getAllTags(true).map(t => t.tag); // include pinned tags as suggestions
+  const all = getAllTags(true).map(t => t.tag); 
   const available = all.filter(t => !state.draftTags.includes(t)).slice(0, 8);
   els.tagSuggestions.innerHTML = '';
   if (available.length === 0) {
@@ -792,15 +782,6 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && els.modal.classList.contains('open')) closeModal();
   if (e.key === 'Escape' && state.selectionMode) toggleSelectionMode();
 });
-
-// Register Service Worker for PWA
-if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('service-worker.js')
-      .then(reg => console.log('SW registered:', reg))
-      .catch(err => console.log('SW registration failed:', err));
-  });
-}
 
 // ============ Init ============
 async function init() {
