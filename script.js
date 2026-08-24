@@ -70,38 +70,61 @@ function setSyncStatus(status) {
   if (status === 'error') els.syncIndicator.classList.add('error');
 }
 
-// ============ Cloud Storage (JSONBin) ============
+// Helper function to fetch a bin with a retry if it fails
+async function fetchBinData(binId, retries = 2) {
+  try {
+    const res = await fetch(`https://api.jsonbin.io/v3/b/${binId}/latest`, {
+      method: 'GET',
+      headers: { 'X-Master-Key': JSONBIN_API_KEY }
+    });
+    if (!res.ok) throw new Error(`Status: ${res.status}`);
+    return await res.json();
+  } catch (err) {
+    // If it fails, wait 600ms and try again (up to 2 times)
+    if (retries > 0) {
+      await new Promise(r => setTimeout(r, 600)); 
+      return fetchBinData(binId, retries - 1);
+    }
+    console.warn(`Failed to load bin ${binId} after retries:`, err);
+    showToast(`Error loading bin: ${binId.substring(0, 6)}...`);
+    return null;
+  }
+}
+
 async function loadFromCloud() {
   setSyncStatus('syncing');
   try {
-    // Fetch all bins in parallel
-    const fetchPromises = JSONBIN_BIN_IDS.map(id => 
-      fetch(`https://api.jsonbin.io/v3/b/${id}/latest`, {
-        method: 'GET',
-        headers: { 'X-Master-Key': JSONBIN_API_KEY }
-      }).then(res => {
-        if (!res.ok) throw new Error(`Failed to load bin ${id}`);
-        return res.json();
-      }).catch(err => {
-        console.warn(`Failed to load bin ${id}:`, err);
-        return null; // Don't break everything if one bin fails
-      })
-    );
+    // Reset the bin map to accurately reflect the current cloud state
+    for (let id in phraseBinMap) delete phraseBinMap[id];
 
+    // Fetch all bins in parallel using the retry helper
+    const fetchPromises = JSONBIN_BIN_IDS.map(id => fetchBinData(id));
     const results = await Promise.all(fetchPromises);
     
     const allPhrases = [];
 
     results.forEach((data, index) => {
       const binId = JSONBIN_BIN_IDS[index];
-      if (data && data.record && Array.isArray(data.record.phrases)) {
-        data.record.phrases.forEach(p => {
-          if (p.id && !phraseBinMap[p.id]) { 
-            allPhrases.push(p);
-            phraseBinMap[p.id] = binId; // Remember which bin this phrase lives in
-          }
-        });
+      if (!data || !data.record) return; // Skip if data is completely missing
+
+      // Handle data whether it's wrapped in { phrases: [] } or just a raw array []
+      let phrases = [];
+      if (Array.isArray(data.record.phrases)) {
+        phrases = data.record.phrases;
+      } else if (Array.isArray(data.record)) {
+        phrases = data.record;
       }
+
+      phrases.forEach(p => {
+        // If a phrase doesn't have an ID, generate one so it isn't skipped
+        if (!p.id) p.id = uid();
+        
+        // Only add it if we haven't seen this ID in another bin
+        if (!phraseBinMap[p.id]) { 
+          allPhrases.push(p);
+          phraseBinMap[p.id] = binId; 
+        }
+      });
     });
 
     state.phrases = allPhrases;
@@ -111,7 +134,7 @@ async function loadFromCloud() {
     setSyncStatus('synced');
     return true;
   } catch (e) {
-    console.warn('Cloud load failed, trying local cache:', e);
+    console.warn('Cloud load failed completely, trying local cache:', e);
     setSyncStatus('error');
     
     const raw = localStorage.getItem(STORAGE_KEY);
