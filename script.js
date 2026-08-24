@@ -7,7 +7,8 @@
 // Paste your Bin ID and API Key (X-Master-Key) below.
 // =======================================================================
 const JSONBIN_BIN_ID = "6a89e35cf5f4af5e29361a4b"; 
-const JSONBIN_API_KEY = "$2a$10$L0fsuyD5N.QZur7p94vrd.MUgYSsBM3e85EwILBEzY8B0FMSOrWIO"; 
+const JSONBIN_API_KEY = "$2a$10$L0fsuyD5N.QZur7p94vrd.MUgYSsBM3e85EwILBEzY8B0FMSOrWIO";
+const phraseBinMap = {}; // <--- ADD THIS LINE
 // =======================================================================
 
 const STORAGE_KEY = 'phrases.local.cache'; 
@@ -65,17 +66,39 @@ function setSyncStatus(status) {
 async function loadFromCloud() {
   setSyncStatus('syncing');
   try {
-    const url = `https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}/latest`;
-    const response = await fetch(url, {
-      method: 'GET',
-      headers: { 'X-Master-Key': JSONBIN_API_KEY }
+    // Fetch all bins in parallel
+    const fetchPromises = JSONBIN_BIN_IDS.map(id => 
+      fetch(`https://api.jsonbin.io/v3/b/${id}/latest`, {
+        method: 'GET',
+        headers: { 'X-Master-Key': JSONBIN_API_KEY }
+      }).then(res => {
+        if (!res.ok) throw new Error(`Failed to load bin ${id}`);
+        return res.json();
+      }).catch(err => {
+        console.warn(`Failed to load bin ${id}:`, err);
+        return null; // Don't break everything if one bin fails
+      })
+    );
+
+    const results = await Promise.all(fetchPromises);
+    
+    const allPhrases = [];
+
+    results.forEach((data, index) => {
+      const binId = JSONBIN_BIN_IDS[index];
+      if (data && data.record && Array.isArray(data.record.phrases)) {
+        data.record.phrases.forEach(p => {
+          if (p.id && !phraseBinMap[p.id]) { 
+            allPhrases.push(p);
+            phraseBinMap[p.id] = binId; // Remember which bin this phrase lives in
+          }
+        });
+      }
     });
+
+    state.phrases = allPhrases;
     
-    if (!response.ok) throw new Error('Network response was not ok');
-    
-    const data = await response.json();
-    state.phrases = data.record && data.record.phrases ? data.record.phrases : [];
-    
+    // Save combined array to local cache
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state.phrases));
     setSyncStatus('synced');
     return true;
@@ -93,18 +116,69 @@ async function loadFromCloud() {
 async function saveToCloud() {
   setSyncStatus('syncing');
   try {
-    const url = `https://api.jsonbin.io/v3/b/${JSONBIN_BIN_ID}`;
-    const response = await fetch(url, {
-      method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Master-Key': JSONBIN_API_KEY
-      },
-      body: JSON.stringify({ status: "active", phrases: state.phrases })
+    const binsData = {};
+    JSONBIN_BIN_IDS.forEach(id => binsData[id] = []);
+
+    const MAX_BIN_SIZE = 90000; // 90KB limit to be safe (JSONBin max is 100kb)
+    let binsAreFull = false;
+
+    state.phrases.forEach(p => {
+      let targetBin = phraseBinMap[p.id];
+      
+      // If it's a new phrase, find a bin that has enough space
+      if (!targetBin) {
+        targetBin = JSONBIN_BIN_IDS[JSONBIN_BIN_IDS.length - 1]; // fallback to the last bin
+        
+        for (let i = 0; i < JSONBIN_BIN_IDS.length; i++) {
+          const binId = JSONBIN_BIN_IDS[i];
+          const currentPayload = JSON.stringify({ status: "active", phrases: binsData[binId] });
+          
+          // Check size in bytes
+          if (new Blob([currentPayload]).size < MAX_BIN_SIZE) {
+            targetBin = binId;
+            break;
+          }
+        }
+        
+        // If we couldn't find a bin with space, we fallback to the last bin, but flag it as full
+        const fallbackPayload = JSON.stringify({ status: "active", phrases: binsData[targetBin] });
+        if (new Blob([fallbackPayload]).size >= MAX_BIN_SIZE) {
+          binsAreFull = true;
+        }
+      }
+      
+      // Add phrase to its bin and update the map
+      binsData[targetBin].push(p);
+      phraseBinMap[p.id] = targetBin;
     });
 
-    if (!response.ok) throw new Error('Save failed');
+    // Save each bin
+    const savePromises = JSONBIN_BIN_IDS.map(binId => {
+      const payload = JSON.stringify({ status: "active", phrases: binsData[binId] });
+      return fetch(`https://api.jsonbin.io/v3/b/${binId}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Master-Key': JSONBIN_API_KEY
+        },
+        body: payload
+      }).then(res => {
+        if (!res.ok) throw new Error(`Save failed for bin ${binId}`);
+        return res.json();
+      }).catch(err => {
+        console.error(`Failed to save bin ${binId}:`, err);
+        return null;
+      });
+    });
+
+    await Promise.all(savePromises);
     
+    // Warn the user if they need to make a new bin
+    if (binsAreFull) {
+      showToast('Warning: All bins are full! Create a new bin ID.');
+    }
+    
+    // Update local cache on success
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state.phrases));
     setSyncStatus('synced');
     return true;
@@ -115,7 +189,6 @@ async function saveToCloud() {
     return false;
   }
 }
-
 // ============ Utilities ============
 function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
