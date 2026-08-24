@@ -1,38 +1,20 @@
 // ============================================================
-// Phrases — a personal lexicon (JSONBin.io Cloud Edition)
-// FIXED VERSION — prevents partial-load overwrites + stabilizes count
+// Phrases — Personal Lexicon (Supabase Edition)
+// Clean, reliable, no more multi-bin headaches
 // ============================================================
 
-// =======================================================================
-// 1. JSONBIN.IO CONFIGURATION
-// Paste your Bin ID and API Key (X-Master-Key) below.
-// =======================================================================
-const JSONBIN_BIN_IDS = [
-  // ← PUT YOUR 8 REAL BIN IDs HERE (no empty strings)
-  "6a8c8eb1f5f4af5e293d4c7d", 
-  "6a8ae059f5f4af5e2938446a",
-  "6a8c93e2f5f4af5e293d6012",
-  "6a8cac9eda38895dfe0c1f64",
-  "6a8ca826f5f4af5e293da17b",
-  "6a8cb032f5f4af5e293dbe46",
-  "6a8cb11df5f4af5e293dc17c",
-  "6a8cb1eff5f4af5e293dc3f5"
-];
-const JSONBIN_API_KEY = "$2a$10$0dH1LXansfpglhcBp0tRzuqI.DBNyYqAF2iQxCH4fIOhn4MmK02au"; // ← your X-Master-Key
-const phraseBinMap = {};
+// ========== SUPABASE CONFIG ==========
+// Paste your Project URL and anon key here
+const SUPABASE_URL = 'https://xxxxxxxx.supabase.co';          // ← your Project URL
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...'; // ← your anon public key
 
-// =======================================================================
+const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-const STORAGE_KEY = 'phrases.local.cache';
-
-// Track whether the last cloud load got data from every bin
-let lastLoadComplete = false;
-
-// ============ State ============
+// ========== State ==========
 const state = {
   phrases: [],
   search: '',
-  activeTags: [], // Array to support multiple tags
+  activeTags: [],
   editingId: null,
   draftTags: [],
   suppressClick: false,
@@ -42,7 +24,7 @@ const state = {
   pinnedTags: []
 };
 
-// ============ DOM refs ============
+// ========== DOM refs ==========
 const $ = (sel) => document.querySelector(sel);
 const els = {
   list:               $('#phrases-list'),
@@ -70,223 +52,108 @@ const els = {
   btnCancelSelection: $('#btn-cancel-selection')
 };
 
-// ============ Sync Indicator ============
+// ========== Sync Indicator ==========
 function setSyncStatus(status) {
   els.syncIndicator.classList.remove('syncing', 'error');
   if (status === 'syncing') els.syncIndicator.classList.add('syncing');
   if (status === 'error') els.syncIndicator.classList.add('error');
 }
 
-// Helper function to fetch a bin with a retry if it fails
-async function fetchBinData(binId, retries = 2) {
-  if (!binId || !binId.trim()) return null;
-
-  try {
-    const res = await fetch(`https://api.jsonbin.io/v3/b/${binId}/latest`, {
-      method: 'GET',
-      headers: { 'X-Master-Key': JSONBIN_API_KEY }
-    });
-    if (!res.ok) throw new Error(`Status: ${res.status}`);
-    return await res.json();
-  } catch (err) {
-    // If it fails, wait 700ms and try again (up to 2 times)
-    if (retries > 0) {
-      await new Promise(r => setTimeout(r, 700));
-      return fetchBinData(binId, retries - 1);
-    }
-    console.warn(`Failed to load bin ${binId} after retries:`, err);
-    showToast(`Error loading bin: ${binId.substring(0, 6)}...`);
-    return null;
-  }
-}
-
+// ========== Cloud Load / Save ==========
 async function loadFromCloud() {
   setSyncStatus('syncing');
-  lastLoadComplete = false;
+  try {
+    const { data, error } = await supabase
+      .from('phrases')
+      .select('*')
+      .order('created_at', { ascending: false });
 
-  // Reset the bin map to accurately reflect the current cloud state
-  for (let id in phraseBinMap) delete phraseBinMap[id];
+    if (error) throw error;
 
-  // Fetch all bins in parallel using the retry helper
-  const fetchPromises = JSONBIN_BIN_IDS.map(id => fetchBinData(id));
-  const results = await Promise.all(fetchPromises);
+    // Normalize data (Supabase returns tags as array already)
+    state.phrases = (data || []).map(p => ({
+      id: p.id,
+      text: p.text || '',
+      meaning: p.meaning || '',
+      tags: Array.isArray(p.tags) ? p.tags : [],
+      createdAt: p.created_at ? new Date(p.created_at).getTime() : Date.now()
+    }));
 
-  const allPhrases = [];
-  let successCount = 0;
-  const validBinCount = JSONBIN_BIN_IDS.filter(id => id && id.trim()).length;
-
-  results.forEach((data, index) => {
-    const binId = JSONBIN_BIN_IDS[index];
-    if (!data || !data.record) return; // Skip if data is completely missing
-
-    successCount++;
-
-    // Handle data whether it's wrapped in { phrases: [] } or just a raw array []
-    let phrases = [];
-    if (Array.isArray(data.record.phrases)) {
-      phrases = data.record.phrases;
-    } else if (Array.isArray(data.record)) {
-      phrases = data.record;
-    } else {
-      console.warn(`Unexpected data shape in bin ${binId}`);
-      return;
-    }
-
-    phrases.forEach(p => {
-      // Skip broken entries (this was causing "undefined" sentences)
-      if (!p || typeof p.text !== 'string' || !p.text.trim()) {
-        console.warn('Skipping invalid phrase (missing text):', p);
-        return;
-      }
-
-      // Prefer existing stable ID. Only generate if truly missing.
-      if (!p.id) {
-        p.id = uid();
-        console.warn('Generated ID for phrase that was missing one:', p.text.slice(0, 50));
-      }
-
-      // Normalize fields
-      p.meaning = typeof p.meaning === 'string' ? p.meaning : '';
-      p.tags = Array.isArray(p.tags) ? p.tags : [];
-      p.createdAt = p.createdAt || Date.now();
-
-      // Only add it if we haven't seen this ID in another bin
-      if (!phraseBinMap[p.id]) {
-        allPhrases.push(p);
-        phraseBinMap[p.id] = binId;
-      }
-    });
-  });
-
-  state.phrases = allPhrases;
-
-  // Decide if the load was complete
-  lastLoadComplete = (successCount === validBinCount && validBinCount > 0);
-
-  // Save combined array to local cache
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state.phrases));
-
-  if (lastLoadComplete) {
     setSyncStatus('synced');
     return true;
-  } else {
+  } catch (err) {
+    console.error('Load failed:', err);
     setSyncStatus('error');
-    showToast(`Partial load (${successCount}/${validBinCount} bins). Save is blocked to protect your data.`);
-    console.warn('Partial cloud load detected — saveToCloud will refuse to run until a full load succeeds');
+    showToast('Failed to load phrases');
     return false;
   }
 }
 
-async function saveToCloud() {
-  // ========== CRITICAL SAFETY ==========
-  // Never overwrite cloud data if the previous load was incomplete.
-  // This is the main cause of data loss / disappearing phrases.
-  if (!lastLoadComplete) {
-    showToast('Cannot save: last load was incomplete. Refresh the page first.');
-    setSyncStatus('error');
-    return false;
-  }
-
+async function savePhraseToCloud(phrase, isUpdate = false) {
   setSyncStatus('syncing');
   try {
-    const binsData = {};
-    JSONBIN_BIN_IDS.forEach(id => {
-      if (id && id.trim()) binsData[id] = [];
-    });
+    if (isUpdate) {
+      const { error } = await supabase
+        .from('phrases')
+        .update({
+          text: phrase.text,
+          meaning: phrase.meaning || '',
+          tags: phrase.tags || []
+        })
+        .eq('id', phrase.id);
 
-    const MAX_BIN_SIZE = 90000; // 90KB limit to be safe (JSONBin max is 100kb)
-    let binsAreFull = false;
+      if (error) throw error;
+    } else {
+      const { data, error } = await supabase
+        .from('phrases')
+        .insert({
+          text: phrase.text,
+          meaning: phrase.meaning || '',
+          tags: phrase.tags || []
+        })
+        .select()
+        .single();
 
-    state.phrases.forEach(p => {
-      if (!p || !p.id || !p.text) return; // extra safety
+      if (error) throw error;
 
-      let targetBin = phraseBinMap[p.id];
-
-      // If it's a new phrase, find a bin that has enough space
-      if (!targetBin) {
-        targetBin = null;
-
-        for (let i = 0; i < JSONBIN_BIN_IDS.length; i++) {
-          const binId = JSONBIN_BIN_IDS[i];
-          if (!binId || !binId.trim()) continue;
-
-          const currentPayload = JSON.stringify({ status: "active", phrases: binsData[binId] || [] });
-          if (new Blob([currentPayload]).size < MAX_BIN_SIZE) {
-            targetBin = binId;
-            break;
-          }
-        }
-
-        // fallback to last valid bin
-        if (!targetBin) {
-          targetBin = JSONBIN_BIN_IDS.filter(id => id && id.trim()).pop();
-        }
-
-        // If we still couldn't find space, flag it
-        if (targetBin) {
-          const fallbackPayload = JSON.stringify({ status: "active", phrases: binsData[targetBin] || [] });
-          if (new Blob([fallbackPayload]).size >= MAX_BIN_SIZE) {
-            binsAreFull = true;
-          }
-        }
-      }
-
-      if (!targetBin) return; // should never happen if bins are configured
-
-      // Add phrase to its bin and update the map
-      binsData[targetBin] = binsData[targetBin] || [];
-      binsData[targetBin].push(p);
-      phraseBinMap[p.id] = targetBin;
-    });
-
-    // Save each bin
-    const savePromises = Object.keys(binsData).map(binId => {
-      const payload = JSON.stringify({ status: "active", phrases: binsData[binId] });
-      return fetch(`https://api.jsonbin.io/v3/b/${binId}`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Master-Key': JSONBIN_API_KEY
-        },
-        body: payload
-      }).then(res => {
-        if (!res.ok) throw new Error(`Save failed for bin ${binId} (${res.status})`);
-        return res.json();
-      }).catch(err => {
-        console.error(`Failed to save bin ${binId}:`, err);
-        return null;
-      });
-    });
-
-    const results = await Promise.all(savePromises);
-    const failedCount = results.filter(r => r === null).length;
-
-    if (failedCount > 0) {
-      showToast(`Saved with ${failedCount} error(s). Check console.`);
-      setSyncStatus('error');
-      return false;
+      // Update local id with the real UUID from Supabase
+      phrase.id = data.id;
+      phrase.createdAt = new Date(data.created_at).getTime();
     }
 
-    // Warn the user if they need to make a new bin
-    if (binsAreFull) {
-      showToast('Warning: All bins are full! Create a new bin ID.');
-    }
-
-    // Update local cache on success
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state.phrases));
     setSyncStatus('synced');
     return true;
-  } catch (e) {
-    console.warn('Cloud save failed:', e);
+  } catch (err) {
+    console.error('Save failed:', err);
     setSyncStatus('error');
-    showToast('Offline: Saved locally, will sync later');
+    showToast('Failed to save');
     return false;
   }
 }
 
-// ============ Utilities ============
+async function deleteFromCloud(ids) {
+  setSyncStatus('syncing');
+  try {
+    const { error } = await supabase
+      .from('phrases')
+      .delete()
+      .in('id', ids);
+
+    if (error) throw error;
+    setSyncStatus('synced');
+    return true;
+  } catch (err) {
+    console.error('Delete failed:', err);
+    setSyncStatus('error');
+    showToast('Failed to delete');
+    return false;
+  }
+}
+
+// ========== Utilities ==========
 function uid() {
-  return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+  // Only used temporarily before Supabase returns the real UUID
+  return crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2);
 }
 
 function getAllTags(includePinned = false) {
@@ -317,11 +184,10 @@ function showToast(msg) {
   toastTimer = setTimeout(() => els.toast.classList.remove('show'), 2200);
 }
 
-// ============ Filtering ============
+// ========== Filtering ==========
 function getFiltered() {
   const q = state.search.toLowerCase().trim();
   let filtered = state.phrases.filter(p => {
-    // If tags are selected, check if the card has ANY of the selected tags
     if (state.activeTags.length > 0) {
       const hasTag = (p.tags || []).some(t => state.activeTags.includes(t));
       if (!hasTag) return false;
@@ -331,24 +197,21 @@ function getFiltered() {
     return hay.includes(q);
   });
 
-  // RANDOM FEED LOGIC
-  // If no tags are selected AND no search is active, pick 20 random cards
+  // RANDOM FEED: show 20 random when no filters
   if (state.activeTags.length === 0 && q === '') {
-    // Fisher-Yates shuffle for randomness
     for (let i = filtered.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
       [filtered[i], filtered[j]] = [filtered[j], filtered[i]];
     }
-    filtered = filtered.slice(0, 20); // Show only 20
+    filtered = filtered.slice(0, 20);
   } else {
-    // Otherwise, sort by date
     filtered.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
   }
 
   return filtered;
 }
 
-// ============ Render ============
+// ========== Render ==========
 function render(animateCards = false) {
   renderTags();
   renderPinnedTags();
@@ -440,32 +303,28 @@ function renderPinnedTags() {
 
 function attachTagHoldHandlers(btn, tag, isPinned) {
   let pressTimer = null;
-  let isHolding = false;
 
   const start = () => {
-    isHolding = true;
     document.querySelectorAll('.tag-chip.editing').forEach(c => {
       if (c !== btn) c.classList.remove('editing');
     });
     pressTimer = setTimeout(() => {
       btn.classList.add('editing');
-      isHolding = false;
       if (navigator.vibrate) navigator.vibrate(10);
       state.suppressClick = true;
       setTimeout(() => { state.suppressClick = false; }, 100);
     }, 480);
   };
 
-  const move = () => { clearTimeout(pressTimer); isHolding = false; };
-  const end = () => { clearTimeout(pressTimer); };
+  const cancel = () => clearTimeout(pressTimer);
 
   btn.addEventListener('touchstart', start, { passive: true });
-  btn.addEventListener('touchmove', move, { passive: true });
-  btn.addEventListener('touchend', end);
+  btn.addEventListener('touchmove', cancel, { passive: true });
+  btn.addEventListener('touchend', cancel);
   btn.addEventListener('mousedown', start);
-  btn.addEventListener('mousemove', move);
-  btn.addEventListener('mouseup', end);
-  btn.addEventListener('mouseleave', end);
+  btn.addEventListener('mousemove', cancel);
+  btn.addEventListener('mouseup', cancel);
+  btn.addEventListener('mouseleave', cancel);
 
   const pinAction = btn.querySelector(isPinned ? '.unpin' : '.pin');
   const delAction = btn.querySelector('.delete');
@@ -484,9 +343,9 @@ function attachTagHoldHandlers(btn, tag, isPinned) {
   }
 
   if (delAction) {
-    delAction.onclick = (e) => {
+    delAction.onclick = async (e) => {
       e.stopPropagation();
-      deleteTagFromAllCards(tag);
+      await deleteTagFromAllCards(tag);
       if (isPinned) {
         state.pinnedTags = state.pinnedTags.filter(t => t !== tag);
         savePinnedTags();
@@ -497,11 +356,15 @@ function attachTagHoldHandlers(btn, tag, isPinned) {
 }
 
 async function deleteTagFromAllCards(tag) {
-  state.phrases.forEach(p => {
-    if (p.tags) p.tags = p.tags.filter(t => t !== tag);
-  });
-  showToast('Deleting tag from cloud...');
-  await saveToCloud();
+  // Update every phrase that has this tag
+  const affected = state.phrases.filter(p => (p.tags || []).includes(tag));
+  
+  for (const p of affected) {
+    p.tags = p.tags.filter(t => t !== tag);
+    await savePhraseToCloud(p, true);
+  }
+  
+  showToast('Tag removed from all phrases');
 }
 
 function savePinnedTags() {
@@ -594,9 +457,9 @@ function renderList(animate) {
 
     attachCardHandlers(card, p);
     els.list.appendChild(card);
-  }); // END of forEach loop
+  });
 
-  // Add the "Refresh" message ONLY ONCE after all cards are done
+  // Random feed message
   if (state.activeTags.length === 0 && state.search === '' && state.phrases.length > 20) {
     const msg = document.createElement('div');
     msg.className = 'no-results';
@@ -608,11 +471,10 @@ function renderList(animate) {
     msg.innerHTML = `Showing 20 random phrases out of ${state.phrases.length}.<br>Refresh the page to discover more.`;
     els.list.appendChild(msg);
   }
-} // END of renderList function
+}
 
-// ============ Press-and-hold & Selection ============
+// ========== Card handlers ==========
 function attachCardHandlers(card, phrase) {
-
   if (state.selectionMode) {
     card.addEventListener('click', (e) => {
       if (e.target.closest('.selection-delete-btn')) {
@@ -678,14 +540,14 @@ function attachCardHandlers(card, phrase) {
     pressing = false;
   }
 
-  card.addEventListener('touchstart',  start, { passive: true });
-  card.addEventListener('touchmove',  move,  { passive: true });
-  card.addEventListener('touchend',   end);
+  card.addEventListener('touchstart', start, { passive: true });
+  card.addEventListener('touchmove', move, { passive: true });
+  card.addEventListener('touchend', end);
   card.addEventListener('touchcancel', cancel);
-  card.addEventListener('mousedown',   start);
-  card.addEventListener('mousemove',   move);
-  card.addEventListener('mouseup',     end);
-  card.addEventListener('mouseleave',   end);
+  card.addEventListener('mousedown', start);
+  card.addEventListener('mousemove', move);
+  card.addEventListener('mouseup', end);
+  card.addEventListener('mouseleave', end);
 
   const selectBtn = card.querySelector('[data-action="select"]');
   const editBtn = card.querySelector('[data-action="edit"]');
@@ -743,9 +605,7 @@ function updateSelectionUI() {
 
 function toggleSelectionMode() {
   state.selectionMode = !state.selectionMode;
-  if (state.selectionMode) {
-    state.selectedIds = [];
-  } else {
+  if (!state.selectionMode) {
     state.selectedIds = [];
     els.selectionBar.classList.remove('show');
   }
@@ -755,13 +615,17 @@ function toggleSelectionMode() {
 
 async function deleteSelected() {
   const count = state.selectedIds.length;
-  state.phrases = state.phrases.filter(p => !state.selectedIds.includes(p.id));
+  const idsToDelete = [...state.selectedIds];
+  
+  state.phrases = state.phrases.filter(p => !idsToDelete.includes(p.id));
   state.selectedIds = [];
   toggleSelectionMode();
-  showToast(`Deleting ${count} phrases from cloud...`);
-  await saveToCloud();
+  
+  showToast(`Deleting ${count} phrases...`);
+  await deleteFromCloud(idsToDelete);
 }
 
+// Close revealed cards / editing tags when clicking outside
 document.addEventListener('click', (e) => {
   if (state.suppressClick) return;
   if (e.target.closest('.action-btn')) return;
@@ -774,7 +638,7 @@ document.addEventListener('click', (e) => {
   document.querySelectorAll('.phrase-card.revealed').forEach(c => c.classList.remove('revealed'));
 });
 
-// ============ Modal ============
+// ========== Modal ==========
 function openModal(id = null) {
   document.querySelectorAll('.phrase-card.revealed').forEach(c => c.classList.remove('revealed'));
 
@@ -809,7 +673,7 @@ function closeModal() {
   state.draftTags = [];
 }
 
-// ============ Tag editor ============
+// ========== Tag editor ==========
 function renderTagEditor() {
   [...els.tagEditor.children].forEach(c => {
     if (c !== els.tagInput) c.remove();
@@ -882,7 +746,7 @@ els.tagEditor.addEventListener('click', (e) => {
   if (e.target === els.tagEditor) els.tagInput.focus();
 });
 
-// ============ CRUD ============
+// ========== CRUD ==========
 async function savePhrase(e) {
   e.preventDefault();
   if (els.tagInput.value.trim()) addTagFromInput();
@@ -897,32 +761,34 @@ async function savePhrase(e) {
       p.text = text;
       p.meaning = meaning;
       p.tags = [...state.draftTags];
+      showToast('Updating...');
+      await savePhraseToCloud(p, true);
     }
-    showToast('Updating cloud...');
   } else {
-    state.phrases.unshift({
-      id: uid(),
+    const newPhrase = {
+      id: uid(), // temporary, will be replaced by Supabase UUID
       text,
       meaning,
       tags: [...state.draftTags],
       createdAt: Date.now()
-    });
-    showToast('Saving to cloud...');
+    };
+    state.phrases.unshift(newPhrase);
+    showToast('Saving...');
+    await savePhraseToCloud(newPhrase, false);
   }
 
   render(false);
   closeModal();
-  await saveToCloud();
 }
 
 async function deletePhrase(id) {
   state.phrases = state.phrases.filter(p => p.id !== id);
   render(false);
-  showToast('Deleting from cloud...');
-  await saveToCloud();
+  showToast('Deleting...');
+  await deleteFromCloud([id]);
 }
 
-// ============ Event wiring ============
+// ========== Event wiring ==========
 els.addBtn.addEventListener('click', () => openModal());
 els.btnDeleteSelected.addEventListener('click', deleteSelected);
 els.btnCancelSelection.addEventListener('click', toggleSelectionMode);
@@ -951,7 +817,7 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && state.selectionMode) toggleSelectionMode();
 });
 
-// ============ Init ============
+// ========== Init ==========
 async function init() {
   loadPinnedTags();
   await loadFromCloud();
