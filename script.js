@@ -5,8 +5,8 @@
 
 // ========== SUPABASE CONFIG ==========
 // Paste your Project URL and anon key here
-const SUPABASE_URL = 'https://xxxxxxxx.supabase.co';          // ← your Project URL
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...'; // ← your anon public key
+const SUPABASE_URL = 'https://rpejghwofqymsrcjaedq.supabase.co';          // ← your Project URL
+const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJwZWpnaHdvZnF5bXNyY2phZWRxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc2MDcxMDUsImV4cCI6MjEwMzE4MzEwNX0.rmF-NlDuldxVqx1Uk6Ggsp2xk-k9AENpX8cbyt4lVkM'; // ← your anon public key
 
 const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
