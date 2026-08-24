@@ -7,11 +7,11 @@
 // Paste your Bin ID and API Key (X-Master-Key) below.
 // =======================================================================
 const JSONBIN_BIN_IDS = [
-  "6a89e35cf5f4af5e29361a4b", 
-  "PASTE_YOUR_SECOND_BIN_ID_HERE",
+  "6a8c8eb1f5f4af5e293d4c7d", 
+  "6a8ae059f5f4af5e2938446a",
   "PASTE_YOUR_THIRD_BIN_ID_HERE"
 ]; 
-const JSONBIN_API_KEY = "$2a$10$L0fsuyD5N.QZur7p94vrd.MUgYSsBM3e85EwILBEzY8B0FMSOrWIO";
+const JSONBIN_API_KEY = "$2a$10$t5QN0KmGt2KYGRZx79SWEOq0i8ZKfx1l1G2aIKYdzgflYdqFHvsaW";
 const phraseBinMap = {}; // =======================================================================
 
 const STORAGE_KEY = 'phrases.local.cache'; 
