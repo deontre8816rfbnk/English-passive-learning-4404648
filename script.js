@@ -13,7 +13,8 @@ const JSONBIN_BIN_IDS = [
   "6a8cac9eda38895dfe0c1f64",
   "6a8ca826f5f4af5e293da17b",
   "6a8cb032f5f4af5e293dbe46",
-  "6a8cb11df5f4af5e293dc17c"
+  "6a8cb11df5f4af5e293dc17c",
+  "6a8cb1eff5f4af5e293dc3f5"
 ]; 
 const JSONBIN_API_KEY = "$2a$10$t5QN0KmGt2KYGRZx79SWEOq0i8ZKfx1l1G2aIKYdzgflYdqFHvsaW";
 const phraseBinMap = {}; // =======================================================================
