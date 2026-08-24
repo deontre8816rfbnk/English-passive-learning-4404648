@@ -1,16 +1,19 @@
 // ============================================================
 // Phrases — Personal Lexicon
-// JSONBin.io Cloud Edition
+// JSONBin.io Multi-Bin Cloud Edition
 //
-// IMPORTANT:
-// 1. Keep your existing 8 BIN IDs below.
-// 2. Replace JSONBIN_API_KEY with your NEW/ROTATED API key.
-// 3. Database schema:
-//      {
-//        id: "unique-id",
-//        expression: "English expression",
-//        tags: ["Descriptive"]
-//      }
+// IMPORTANT DATABASE RULES
+// ------------------------------------------------------------
+// 1. Every configured bin is treated as an independent database.
+// 2. Existing phrases NEVER move between bins.
+// 3. Existing phrase order is preserved.
+// 4. Editing a phrase only updates its original bin.
+// 5. Deleting a phrase only updates its original bin.
+// 6. Adding a phrase goes into one available bin.
+// 7. A bin that failed to load can NEVER be overwritten.
+// 8. Failed bins are NOT treated as empty bins.
+// 9. JSONBin uses "expression"; the UI internally uses "text".
+// 10. Duplicate IDs are detected instead of silently discarded.
 // ============================================================
 
 
@@ -28,71 +31,75 @@ const JSONBIN_BIN_IDS = [
   "6a8cb11df5f4af5e293dc17c",
   "6a8cb1eff5f4af5e293dc3f5"
 ];
-// IMPORTANT: Do NOT use the API key you previously pasted.
-// Rotate it in JSONBin and place the new key here.
+
+// IMPORTANT:
+// Replace this with your NEW rotated Master Key.
 const JSONBIN_API_KEY = "$2a$10$0dH1LXansfpglhcBp0tRzuqI.DBNyYqAF2iQxCH4fIOhn4MmK02au";
 
 
 // =======================================================================
-// 2. STORAGE CONFIGURATION
+// 2. APP STORAGE
 // =======================================================================
 
 const STORAGE_KEY = 'phrases.local.cache';
-const BIN_INDEX_KEY = 'phrases.bin.index';
-const DATABASE_STATS_KEY = 'phrases.database.stats';
-
-
-// JSONBin is limited in payload size.
-// Keep some safety margin instead of using the absolute maximum.
-const MAX_BIN_SIZE = 90000;
+const PINNED_TAGS_KEY = 'phrases.pinnedTags';
 
 
 // =======================================================================
-// 3. APPLICATION STATE
+// 3. DATABASE ENGINE STATE
+// =======================================================================
+//
+// database.bins:
+//     binId -> {
+//       phrases: [...],
+//       loaded: true
+//     }
+//
+// phraseToBin:
+//     phraseId -> binId
+//
+// failedBins:
+//     Set of bin IDs that could not be loaded.
+//
+// This is the important part that prevents the application from
+// accidentally rebuilding all eight bins every time something changes.
 // =======================================================================
 
-const state = {
-
-  // All loaded phrases from all bins.
-  phrases: [],
-
-  // Search/filter state.
-  search: '',
-  activeTags: [],
-
-  // Editing.
-  editingId: null,
-  draftTags: [],
-
-  // UI.
-  suppressClick: false,
-  isSyncing: false,
-  selectionMode: false,
-  selectedIds: [],
-
-  // Pinned tags.
-  pinnedTags: [],
-
-  // Database information.
-  databaseStats: {
-    total: 0,
-    unique: 0,
-    duplicates: 0,
-    invalid: 0,
-    failedBins: 0,
-    bins: []
-  }
+const database = {
+  bins: {},
+  phraseToBin: new Map(),
+  failedBins: new Set(),
+  loadedBins: new Set(),
+  fullyLoaded: false,
+  duplicateIds: new Set()
 };
 
 
 // =======================================================================
-// 4. DOM REFERENCES
+// 4. APPLICATION STATE
+// =======================================================================
+
+const state = {
+  phrases: [],
+  search: '',
+  activeTags: [],
+  editingId: null,
+  draftTags: [],
+  suppressClick: false,
+  isSyncing: false,
+  selectionMode: false,
+  selectedIds: [],
+  pinnedTags: []
+};
+
+
+// =======================================================================
+// 5. DOM REFERENCES
 // =======================================================================
 
 const $ = (sel) => document.querySelector(sel);
 
 const els = {
-
   list:               $('#phrases-list'),
   tagsFilter:         $('#tags-filter'),
   pinnedTagsFilter:   $('#pinned-tags-filter'),
@@ -101,21 +108,17 @@ const els = {
   addBtn:             $('#add-btn'),
   count:              $('#count-display'),
   syncIndicator:      $('#sync-indicator'),
-
   modal:              $('#modal-backdrop'),
   modalTitle:         $('#modal-title'),
   modalClose:         $('#modal-close'),
   form:               $('#phrase-form'),
   phraseInput:        $('#phrase-input'),
   meaningInput:       $('#meaning-input'),
-
   tagEditor:          $('#tag-editor'),
   tagInput:           $('#tag-input'),
   tagSuggestions:     $('#tag-suggestions'),
-
   saveBtn:            $('#save-btn'),
   toast:              $('#toast'),
-
   selectionBar:       $('#selection-bar'),
   selCount:           $('#sel-count'),
   btnDeleteSelected:  $('#btn-delete-selected'),
@@ -124,32 +127,17 @@ const els = {
 
 
 // =======================================================================
-// 5. BIN INDEX
-//
-// This maps:
-//      phrase ID -> bin ID
-//
-// Example:
-//      {
-//        "K7mQ2xV9aL4pR8": "BIN_ID_1",
-//        "B4tN8zC1wH6yP3": "BIN_ID_1"
-//      }
-//
-// It allows us to modify only the bin containing a phrase.
-// =======================================================================
-
-const phraseBinMap = {};
-
-
-// =======================================================================
-// 6. SYNC STATUS
+// 6. SYNC INDICATOR
 // =======================================================================
 
 function setSyncStatus(status) {
 
   if (!els.syncIndicator) return;
 
-  els.syncIndicator.classList.remove('syncing', 'error');
+  els.syncIndicator.classList.remove(
+    'syncing',
+    'error'
+  );
 
   if (status === 'syncing') {
     els.syncIndicator.classList.add('syncing');
@@ -162,35 +150,8 @@ function setSyncStatus(status) {
 
 
 // =======================================================================
-// 7. BASIC UTILITIES
+// 7. TOAST
 // =======================================================================
-
-function uid() {
-
-  // Generate a reasonably unique ID for NEW records only.
-  return (
-    Date.now().toString(36) +
-    Math.random().toString(36).slice(2, 10)
-  );
-}
-
-
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-
-function escapeHtml(value) {
-
-  return String(value ?? '').replace(/[&<>"']/g, c => ({
-    '&': '&amp;',
-    '<': '&lt;',
-    '>': '&gt;',
-    '"': '&quot;',
-    "'": '&#39;'
-  })[c]);
-}
-
 
 let toastTimer = null;
 
@@ -210,211 +171,286 @@ function showToast(msg) {
 
 
 // =======================================================================
-// 8. VALIDATE CONFIGURATION
+// 8. UNIQUE ID GENERATOR
 // =======================================================================
 
-function validateConfiguration() {
+function uid() {
 
-  if (!JSONBIN_API_KEY ||
-      JSONBIN_API_KEY === 'YOUR_NEW_JSONBIN_MASTER_KEY') {
-
-    throw new Error(
-      'JSONBin API key has not been configured.'
-    );
-  }
-
-  const validBins = JSONBIN_BIN_IDS.filter(
-    id => typeof id === 'string' && id.trim()
+  return (
+    Date.now().toString(36) +
+    Math.random().toString(36).slice(2, 9)
   );
+}
 
-  if (validBins.length === 0) {
 
-    throw new Error(
-      'No JSONBin IDs have been configured.'
-    );
+// =======================================================================
+// 9. HTML ESCAPING
+// =======================================================================
+
+function escapeHtml(value) {
+
+  return String(value ?? '').replace(
+    /[&<>"']/g,
+    char => ({
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;'
+    })[char]
+  );
+}
+
+
+// =======================================================================
+// 10. NORMALIZE JSONBIN PHRASE
+// =======================================================================
+//
+// Your actual JSON uses:
+//
+// {
+//   "id": "...",
+//   "expression": "...",
+//   "tags": []
+// }
+//
+// The application uses:
+//
+// {
+//   "id": "...",
+//   "text": "...",
+//   "tags": []
+// }
+//
+// We convert only in memory.
+// The cloud database remains "expression".
+// =======================================================================
+
+function normalizePhrase(raw) {
+
+  if (!raw || typeof raw !== 'object') {
+    return null;
   }
 
-  if (validBins.length !== JSONBIN_BIN_IDS.length) {
+  if (!raw.id) {
 
     console.warn(
-      'Some JSONBin IDs are empty. Only configured bins will be used.'
-    );
-  }
-
-  // Prevent accidental duplicate bin IDs.
-  const duplicates = validBins.filter(
-    (id, index) => validBins.indexOf(id) !== index
-  );
-
-  if (duplicates.length > 0) {
-
-    throw new Error(
-      'Duplicate JSONBin IDs detected: ' +
-      [...new Set(duplicates)].join(', ')
-    );
-  }
-}
-
-
-// =======================================================================
-// 9. VALIDATE A PHRASE
-// =======================================================================
-//
-// Your actual database uses:
-//
-//      id
-//      expression
-//      tags
-//
-// meaning/createdAt are optional for backwards compatibility,
-// but we don't require them.
-// =======================================================================
-
-function validatePhrase(phrase) {
-
-  if (!phrase || typeof phrase !== 'object') {
-    return {
-      valid: false,
-      reason: 'Record is not an object.'
-    };
-  }
-
-  if (
-    typeof phrase.id !== 'string' ||
-    !phrase.id.trim()
-  ) {
-
-    return {
-      valid: false,
-      reason: 'Missing or invalid ID.'
-    };
-  }
-
-  if (
-    typeof phrase.expression !== 'string' ||
-    !phrase.expression.trim()
-  ) {
-
-    return {
-      valid: false,
-      reason: 'Missing or invalid expression.'
-    };
-  }
-
-  if (
-    phrase.tags !== undefined &&
-    !Array.isArray(phrase.tags)
-  ) {
-
-    return {
-      valid: false,
-      reason: 'Tags must be an array.'
-    };
-  }
-
-  return {
-    valid: true,
-    reason: null
-  };
-}
-
-
-// =======================================================================
-// 10. NORMALIZE PHRASE
-// =======================================================================
-
-function normalizePhrase(phrase) {
-
-  const normalized = {
-    id: String(phrase.id).trim(),
-    expression: String(phrase.expression).trim(),
-    tags: Array.isArray(phrase.tags)
-      ? phrase.tags
-          .filter(t => typeof t === 'string')
-          .map(t => t.trim())
-          .filter(Boolean)
-      : []
-  };
-
-  // Preserve optional fields if they exist.
-  if (
-    typeof phrase.meaning === 'string' &&
-    phrase.meaning.trim()
-  ) {
-    normalized.meaning = phrase.meaning.trim();
-  }
-
-  if (
-    typeof phrase.createdAt === 'number'
-  ) {
-    normalized.createdAt = phrase.createdAt;
-  }
-
-  return normalized;
-}
-
-
-// =======================================================================
-// 11. FETCH ONE BIN
-// =======================================================================
-
-async function fetchBinData(binId, retries = 2) {
-
-  try {
-
-    const res = await fetch(
-      `https://api.jsonbin.io/v3/b/${encodeURIComponent(binId)}/latest`,
-      {
-        method: 'GET',
-        headers: {
-          'X-Master-Key': JSONBIN_API_KEY
-        },
-        cache: 'no-store'
-      }
-    );
-
-    if (!res.ok) {
-
-      throw new Error(
-        `HTTP ${res.status} ${res.statusText}`
-      );
-    }
-
-    const data = await res.json();
-
-    if (!data || !data.record) {
-
-      throw new Error(
-        'JSONBin response does not contain a record.'
-      );
-    }
-
-    return data;
-
-  } catch (err) {
-
-    if (retries > 0) {
-
-      await sleep(700);
-
-      return fetchBinData(
-        binId,
-        retries - 1
-      );
-    }
-
-    console.error(
-      `Failed to load bin ${binId}:`,
-      err
+      'Skipping phrase without ID:',
+      raw
     );
 
     return null;
   }
+
+
+  const expression =
+    typeof raw.expression === 'string'
+      ? raw.expression
+      : typeof raw.text === 'string'
+        ? raw.text
+        : '';
+
+
+  if (!expression.trim()) {
+
+    console.warn(
+      'Skipping phrase without expression/text:',
+      raw
+    );
+
+    return null;
+  }
+
+
+  return {
+    id: String(raw.id),
+
+    text: expression,
+
+    meaning:
+      typeof raw.meaning === 'string'
+        ? raw.meaning
+        : '',
+
+    tags:
+      Array.isArray(raw.tags)
+        ? [...raw.tags]
+        : [],
+
+    createdAt:
+      Number.isFinite(raw.createdAt)
+        ? raw.createdAt
+        : 0
+  };
 }
 
 
 // =======================================================================
-// 12. EXTRACT PHRASES FROM BIN
+// 11. CONVERT APP PHRASE BACK TO JSONBIN FORMAT
+// =======================================================================
+
+function denormalizePhrase(phrase) {
+
+  const result = {
+    id: phrase.id,
+    expression: phrase.text,
+    tags: Array.isArray(phrase.tags)
+      ? [...phrase.tags]
+      : []
+  };
+
+
+  if (phrase.meaning) {
+    result.meaning = phrase.meaning;
+  }
+
+
+  if (phrase.createdAt) {
+    result.createdAt = phrase.createdAt;
+  }
+
+
+  return result;
+}
+
+
+// =======================================================================
+// 12. VALIDATE BIN IDs
+// =======================================================================
+
+function getConfiguredBinIds() {
+
+  return [
+    ...new Set(
+      JSONBIN_BIN_IDS
+        .map(id => String(id || '').trim())
+        .filter(Boolean)
+    )
+  ];
+}
+
+
+// =======================================================================
+// 13. FETCH ONE BIN
+// =======================================================================
+
+async function fetchBinData(binId, retries = 3) {
+
+  if (!binId) {
+
+    return {
+      ok: false,
+      binId,
+      error: 'Empty Bin ID'
+    };
+  }
+
+
+  let lastError = null;
+
+
+  for (
+    let attempt = 1;
+    attempt <= retries;
+    attempt++
+  ) {
+
+    try {
+
+      const response = await fetch(
+        `https://api.jsonbin.io/v3/b/${encodeURIComponent(binId)}/latest`,
+        {
+          method: 'GET',
+
+          headers: {
+            'X-Master-Key': JSONBIN_API_KEY
+          },
+
+          cache: 'no-store'
+        }
+      );
+
+
+      const responseText =
+        await response.text();
+
+
+      let data;
+
+
+      try {
+
+        data = JSON.parse(responseText);
+
+      } catch {
+
+        throw new Error(
+          `Invalid JSON response (${response.status})`
+        );
+      }
+
+
+      if (!response.ok) {
+
+        throw new Error(
+          data?.message ||
+          `HTTP ${response.status}`
+        );
+      }
+
+
+      if (!data || !data.record) {
+
+        throw new Error(
+          'JSONBin returned no record'
+        );
+      }
+
+
+      return {
+        ok: true,
+        binId,
+        data
+      };
+
+
+    } catch (error) {
+
+      lastError = error;
+
+
+      console.warn(
+        `Bin ${binId} failed ` +
+        `(attempt ${attempt}/${retries}):`,
+        error
+      );
+
+
+      if (attempt < retries) {
+
+        const delay =
+          700 * Math.pow(2, attempt - 1);
+
+        await new Promise(
+          resolve => setTimeout(resolve, delay)
+        );
+      }
+    }
+  }
+
+
+  return {
+    ok: false,
+    binId,
+    error:
+      lastError?.message ||
+      'Unknown error'
+  };
+}
+
+
+// =======================================================================
+// 14. EXTRACT PHRASES FROM BIN
 // =======================================================================
 
 function extractPhrasesFromBin(data) {
@@ -423,912 +459,1064 @@ function extractPhrasesFromBin(data) {
     return [];
   }
 
+
   const record = data.record;
 
-  // Your current structure:
-  //
-  // {
-  //   status: "active",
-  //   phrases: [...]
-  // }
 
-  if (Array.isArray(record.phrases)) {
-    return record.phrases;
-  }
-
-  // Also support a raw array for compatibility.
+  // Raw array format
   if (Array.isArray(record)) {
     return record;
   }
+
+
+  // Your current format:
+  //
+  // {
+  //   "status": "active",
+  //   "phrases": [...]
+  // }
+
+  if (
+    record &&
+    Array.isArray(record.phrases)
+  ) {
+    return record.phrases;
+  }
+
+
+  console.warn(
+    'Unexpected JSONBin record structure:',
+    record
+  );
+
 
   return [];
 }
 
 
 // =======================================================================
-// 13. LOAD ALL BINS
+// 15. LOAD ALL EIGHT BINS
 // =======================================================================
 //
-// IMPORTANT:
-// This function NEVER writes anything to JSONBin.
+// ALL bins are requested in parallel.
 //
-// It only reads.
+// We do NOT wait for bin #1 before requesting bin #2.
 //
-// It also does NOT generate IDs for damaged records.
+// A failed bin is recorded as failed and is NEVER treated as empty.
 // =======================================================================
 
 async function loadFromCloud() {
-
-  validateConfiguration();
 
   setSyncStatus('syncing');
 
   state.isSyncing = true;
 
-  try {
 
-    // Clear the old index.
-    Object.keys(phraseBinMap).forEach(
-      id => delete phraseBinMap[id]
+  database.bins = {};
+  database.phraseToBin = new Map();
+  database.failedBins = new Set();
+  database.loadedBins = new Set();
+  database.duplicateIds = new Set();
+
+
+  const binIds =
+    getConfiguredBinIds();
+
+
+  if (binIds.length === 0) {
+
+    state.phrases = [];
+
+    database.fullyLoaded = false;
+
+    state.isSyncing = false;
+
+    setSyncStatus('error');
+
+    showToast(
+      'No JSONBin IDs configured.'
     );
 
-    const configuredBins =
-      JSONBIN_BIN_IDS.filter(
-        id => typeof id === 'string' && id.trim()
-      );
+    return false;
+  }
 
-    const results = await Promise.all(
-      configuredBins.map(binId =>
+
+  console.log(
+    `Loading ${binIds.length} JSONBin databases...`
+  );
+
+
+  // ------------------------------------------------------------
+  // REQUEST ALL BINS IN PARALLEL
+  // ------------------------------------------------------------
+
+  const results =
+    await Promise.all(
+      binIds.map(binId =>
         fetchBinData(binId)
       )
     );
 
-    const allPhrases = [];
 
-    const seenIds = new Map();
+  // ------------------------------------------------------------
+  // COMBINE RESULTS
+  // ------------------------------------------------------------
 
-    const duplicateIds = [];
-
-    const invalidRecords = [];
-
-    const binStats = [];
-
-    results.forEach((data, index) => {
-
-      const binId = configuredBins[index];
-
-      if (!data) {
-
-        binStats.push({
-          binId,
-          loaded: false,
-          count: 0
-        });
-
-        return;
-      }
-
-      const rawPhrases =
-        extractPhrasesFromBin(data);
-
-      let validCount = 0;
-      let invalidCount = 0;
-
-      rawPhrases.forEach((rawPhrase, phraseIndex) => {
-
-        const validation =
-          validatePhrase(rawPhrase);
-
-        if (!validation.valid) {
-
-          invalidCount++;
-
-          invalidRecords.push({
-            binId,
-            index: phraseIndex,
-            reason: validation.reason,
-            record: rawPhrase
-          });
-
-          return;
-        }
-
-        const phrase =
-          normalizePhrase(rawPhrase);
-
-        validCount++;
-
-        // Detect duplicate IDs.
-        if (seenIds.has(phrase.id)) {
-
-          duplicateIds.push({
-            id: phrase.id,
-            firstBin: seenIds.get(phrase.id),
-            duplicateBin: binId
-          });
-
-          // IMPORTANT:
-          // We DO NOT silently add the duplicate.
-          // The first copy remains canonical.
-          return;
-        }
-
-        seenIds.set(
-          phrase.id,
-          binId
-        );
-
-        phraseBinMap[phrase.id] =
-          binId;
-
-        allPhrases.push(phrase);
-      });
-
-      binStats.push({
-        binId,
-        loaded: true,
-        count: rawPhrases.length,
-        valid: validCount,
-        invalid: invalidCount
-      });
-    });
+  const allPhrases = [];
 
 
-    // ------------------------------------------------------------
-    // Database statistics
-    // ------------------------------------------------------------
+  for (const result of results) {
 
-    const totalRaw =
-      binStats.reduce(
-        (sum, bin) => sum + bin.count,
-        0
+    if (!result.ok) {
+
+      database.failedBins.add(
+        result.binId
       );
 
-    const unique =
-      allPhrases.length;
+      console.error(
+        `FAILED BIN: ${result.binId}`,
+        result.error
+      );
 
-    const duplicates =
-      duplicateIds.length;
-
-    const invalid =
-      invalidRecords.length;
-
-    const failedBins =
-      binStats.filter(
-        bin => !bin.loaded
-      ).length;
+      continue;
+    }
 
 
-    state.databaseStats = {
-      total: totalRaw,
-      unique,
-      duplicates,
-      invalid,
-      failedBins,
-      bins: binStats
+    const rawPhrases =
+      extractPhrasesFromBin(
+        result.data
+      );
+
+
+    const normalizedPhrases = [];
+
+
+    for (const rawPhrase of rawPhrases) {
+
+      const phrase =
+        normalizePhrase(rawPhrase);
+
+
+      if (!phrase) {
+        continue;
+      }
+
+
+      // --------------------------------------------------------
+      // DUPLICATE ID PROTECTION
+      // --------------------------------------------------------
+
+      if (
+        database.phraseToBin.has(
+          phrase.id
+        )
+      ) {
+
+        const existingBin =
+          database.phraseToBin.get(
+            phrase.id
+          );
+
+
+        database.duplicateIds.add(
+          phrase.id
+        );
+
+
+        console.error(
+          `Duplicate phrase ID detected: ${phrase.id}`,
+          {
+            firstBin: existingBin,
+            duplicateBin: result.binId
+          }
+        );
+
+
+        // Do NOT silently merge duplicates.
+        continue;
+      }
+
+
+      database.phraseToBin.set(
+        phrase.id,
+        result.binId
+      );
+
+
+      normalizedPhrases.push(
+        phrase
+      );
+
+
+      allPhrases.push(
+        phrase
+      );
+    }
+
+
+    // --------------------------------------------------------
+    // IMPORTANT:
+    // Keep an independent snapshot for this bin.
+    // --------------------------------------------------------
+
+    database.bins[result.binId] = {
+      phrases: normalizedPhrases,
+      loaded: true
     };
 
 
-    // ------------------------------------------------------------
-    // Keep the successfully loaded unique records.
-    // ------------------------------------------------------------
+    database.loadedBins.add(
+      result.binId
+    );
+  }
 
-    state.phrases = allPhrases;
+
+  // ------------------------------------------------------------
+  // APPLICATION STATE
+  // ------------------------------------------------------------
+
+  state.phrases =
+    allPhrases;
 
 
-    // ------------------------------------------------------------
-    // Local cache
-    // ------------------------------------------------------------
+  database.fullyLoaded =
+    database.failedBins.size === 0;
+
+
+  state.isSyncing = false;
+
+
+  // ------------------------------------------------------------
+  // CACHE ONLY COMPLETE LOADS
+  // ------------------------------------------------------------
+
+  if (database.fullyLoaded) {
 
     localStorage.setItem(
       STORAGE_KEY,
-      JSON.stringify(state.phrases)
+      JSON.stringify(
+        state.phrases
+      )
     );
 
+    setSyncStatus('synced');
 
-    // Store diagnostics locally.
-    localStorage.setItem(
-      DATABASE_STATS_KEY,
-      JSON.stringify(state.databaseStats)
-    );
-
-
-    // Store the ID -> bin map.
-    localStorage.setItem(
-      BIN_INDEX_KEY,
-      JSON.stringify(phraseBinMap)
-    );
-
-
-    // ------------------------------------------------------------
-    // Diagnostics
-    // ------------------------------------------------------------
-
-    console.group(
-      '%cPhrases Database',
-      'font-weight:bold'
-    );
-
-    console.log(
-      'Raw records:',
-      totalRaw
-    );
-
-    console.log(
-      'Unique records:',
-      unique
-    );
-
-    console.log(
-      'Duplicate IDs:',
-      duplicates
-    );
-
-    console.log(
-      'Invalid records:',
-      invalid
-    );
-
-    console.log(
-      'Failed bins:',
-      failedBins
-    );
-
-    console.table(binStats);
-
-    if (duplicateIds.length) {
-      console.warn(
-        'Duplicate IDs detected:',
-        duplicateIds
-      );
-    }
-
-    if (invalidRecords.length) {
-      console.warn(
-        'Invalid records detected:',
-        invalidRecords
-      );
-    }
-
-    console.groupEnd();
-
-
-    // ------------------------------------------------------------
-    // Status
-    // ------------------------------------------------------------
-
-    if (failedBins > 0) {
-
-      setSyncStatus('error');
-
-      showToast(
-        `${failedBins} bin(s) failed to load. Check console.`
-      );
-
-    } else {
-
-      setSyncStatus('synced');
-
-      if (duplicates > 0) {
-
-        showToast(
-          `${unique} loaded. ${duplicates} duplicate ID(s) detected.`
-        );
-
-      } else if (invalid > 0) {
-
-        showToast(
-          `${unique} loaded. ${invalid} invalid record(s) detected.`
-        );
-      }
-    }
-
-
-    state.isSyncing = false;
-
-    return {
-      success: failedBins === 0,
-      phrases: allPhrases,
-      stats: state.databaseStats,
-      duplicateIds,
-      invalidRecords
-    };
-
-
-  } catch (error) {
-
-    console.error(
-      'Cloud loading failed:',
-      error
-    );
-
-    state.isSyncing = false;
+  } else {
 
     setSyncStatus('error');
 
-    // ----------------------------------------------------------
-    // FALLBACK TO LOCAL CACHE
-    // ----------------------------------------------------------
+    console.error(
+      'Some JSONBin databases failed to load.'
+    );
 
-    try {
+    console.error(
+      'Failed bins:',
+      [...database.failedBins]
+    );
 
-      const raw =
-        localStorage.getItem(STORAGE_KEY);
-
-      state.phrases =
-        raw ? JSON.parse(raw) : [];
-
-      // Rebuild local map from cache.
-      Object.keys(phraseBinMap).forEach(
-        id => delete phraseBinMap[id]
-      );
-
-      const savedIndex =
-        localStorage.getItem(BIN_INDEX_KEY);
-
-      if (savedIndex) {
-
-        const parsed =
-          JSON.parse(savedIndex);
-
-        Object.assign(
-          phraseBinMap,
-          parsed
-        );
-      }
-
-      showToast(
-        'Offline: showing last saved phrases.'
-      );
-
-    } catch (cacheError) {
-
-      console.error(
-        'Local cache failed:',
-        cacheError
-      );
-
-      state.phrases = [];
-
-      showToast(
-        'Database could not be loaded.'
-      );
-    }
-
-    return {
-      success: false,
-      phrases: state.phrases,
-      stats: state.databaseStats
-    };
-  }
-}
-
-
-// =======================================================================
-// 14. GET A BIN'S CURRENT CONTENT
-// =======================================================================
-//
-// This is used immediately before modifying a bin.
-//
-// We do NOT trust stale local data when writing.
-// =======================================================================
-
-async function fetchCurrentBin(binId) {
-
-  const data =
-    await fetchBinData(binId, 2);
-
-  if (!data) {
-
-    throw new Error(
-      `Unable to retrieve bin ${binId} before modification.`
+    showToast(
+      `${database.failedBins.size} bin(s) failed. ` +
+      `Cloud database is protected.`
     );
   }
 
-  const phrases =
-    extractPhrasesFromBin(data);
 
-  return {
-    status:
-      data.record?.status || 'active',
+  // ------------------------------------------------------------
+  // DATABASE REPORT
+  // ------------------------------------------------------------
 
-    phrases
-  };
+  console.log(
+    '================================================'
+  );
+
+  console.log(
+    'JSONBIN DATABASE REPORT'
+  );
+
+  console.log(
+    'Configured bins:',
+    binIds.length
+  );
+
+  console.log(
+    'Loaded bins:',
+    database.loadedBins.size
+  );
+
+  console.log(
+    'Failed bins:',
+    database.failedBins.size
+  );
+
+  console.log(
+    'Total phrases:',
+    state.phrases.length
+  );
+
+  console.log(
+    'Duplicate IDs:',
+    database.duplicateIds.size
+  );
+
+  if (database.failedBins.size) {
+
+    console.table(
+      [...database.failedBins].map(
+        binId => ({
+          binId,
+          status: 'FAILED'
+        })
+      )
+    );
+  }
+
+
+  console.log(
+    '================================================'
+  );
+
+
+  return database.fullyLoaded;
 }
 
 
 // =======================================================================
-// 15. WRITE ONE BIN
+// 16. GET BIN THAT OWNS A PHRASE
+// =======================================================================
+
+function getPhraseBin(id) {
+
+  return (
+    database.phraseToBin.get(
+      id
+    ) || null
+  );
+}
+
+
+// =======================================================================
+// 17. CALCULATE JSON SIZE
+// =======================================================================
+
+function getPayloadSizeBytes(
+  phrases
+) {
+
+  const payload = {
+    status: 'active',
+
+    phrases:
+      phrases.map(
+        denormalizePhrase
+      )
+  };
+
+
+  return new Blob([
+    JSON.stringify(payload)
+  ]).size;
+}
+
+
+// =======================================================================
+// 18. FIND A BIN FOR A NEW PHRASE
+// =======================================================================
+//
+// Existing phrases are NEVER moved.
+//
+// We look for the first successfully-loaded bin that can safely
+// accept the new phrase without approaching the 100 KB limit.
+//
+// We intentionally use a conservative 90 KB ceiling.
+// =======================================================================
+
+function findBinForNewPhrase(
+  phrase
+) {
+
+  const MAX_SAFE_SIZE =
+    90 * 1024;
+
+
+  const binIds =
+    getConfiguredBinIds();
+
+
+  for (const binId of binIds) {
+
+    // Never touch a bin that failed to load.
+    if (
+      database.failedBins.has(
+        binId
+      )
+    ) {
+      continue;
+    }
+
+
+    const bin =
+      database.bins[binId];
+
+
+    if (!bin || !bin.loaded) {
+      continue;
+    }
+
+
+    const testPhrases = [
+      ...bin.phrases,
+      phrase
+    ];
+
+
+    const size =
+      getPayloadSizeBytes(
+        testPhrases
+      );
+
+
+    if (size < MAX_SAFE_SIZE) {
+
+      return binId;
+    }
+  }
+
+
+  return null;
+}
+
+
+// =======================================================================
+// 19. WRITE EXACTLY ONE BIN
+// =======================================================================
+//
+// This is the most important safety function in the entire script.
+//
+// It is IMPOSSIBLE for this function to write to a bin that failed
+// to load during the current session.
 // =======================================================================
 
 async function writeBin(
   binId,
-  phrases,
-  status = 'active'
+  phrases
 ) {
+
+  if (!binId) {
+
+    throw new Error(
+      'Cannot write: missing Bin ID.'
+    );
+  }
+
+
+  // ------------------------------------------------------------
+  // SAFETY LOCK #1
+  // ------------------------------------------------------------
+
+  if (
+    database.failedBins.has(
+      binId
+    )
+  ) {
+
+    throw new Error(
+      `SAFETY LOCK: ${binId} failed to load. ` +
+      `Refusing to overwrite it.`
+    );
+  }
+
+
+  // ------------------------------------------------------------
+  // SAFETY LOCK #2
+  // ------------------------------------------------------------
+
+  if (
+    !database.loadedBins.has(
+      binId
+    )
+  ) {
+
+    throw new Error(
+      `SAFETY LOCK: ${binId} was not successfully loaded.`
+    );
+  }
+
+
+  // ------------------------------------------------------------
+  // SAFETY LOCK #3
+  // ------------------------------------------------------------
+
+  if (
+    !database.bins[binId]
+  ) {
+
+    throw new Error(
+      `SAFETY LOCK: No database snapshot exists for ${binId}.`
+    );
+  }
+
 
   const payload = {
-    status,
-    phrases
+    status: 'active',
+
+    phrases:
+      phrases.map(
+        denormalizePhrase
+      )
   };
 
-  const serialized =
-    JSON.stringify(payload);
 
-  // ------------------------------------------------------------
-  // Size protection
-  // ------------------------------------------------------------
+  const response =
+    await fetch(
+      `https://api.jsonbin.io/v3/b/${encodeURIComponent(binId)}`,
+      {
+        method: 'PUT',
 
-  const size =
-    new Blob([serialized]).size;
+        headers: {
+          'Content-Type':
+            'application/json',
 
-  if (size >= MAX_BIN_SIZE) {
+          'X-Master-Key':
+            JSONBIN_API_KEY,
 
-    throw new Error(
-      `Bin ${binId} is too large (${size} bytes).`
+          // Enable JSONBin version control.
+          'X-Bin-Versioning':
+            'true'
+        },
+
+        body:
+          JSON.stringify(
+            payload
+          )
+      }
     );
-  }
 
 
-  const res = await fetch(
-    `https://api.jsonbin.io/v3/b/${encodeURIComponent(binId)}`,
-    {
-      method: 'PUT',
+  const responseText =
+    await response.text();
 
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Master-Key': JSONBIN_API_KEY
-      },
 
-      body: serialized,
+  if (!response.ok) {
 
-      cache: 'no-store'
+    let message =
+      responseText;
+
+
+    try {
+
+      const parsed =
+        JSON.parse(
+          responseText
+        );
+
+
+      message =
+        parsed.message ||
+        responseText;
+
+    } catch {
+      // Keep original response text.
     }
-  );
 
-
-  if (!res.ok) {
-
-    const errorText =
-      await res.text().catch(() => '');
 
     throw new Error(
-      `Failed to save bin ${binId}: ` +
-      `${res.status} ${errorText}`
+      `JSONBin update failed for ${binId}: ${message}`
     );
   }
 
 
-  return await res.json();
+  // ------------------------------------------------------------
+  // Update local snapshot only AFTER successful cloud write.
+  // ------------------------------------------------------------
+
+  database.bins[binId] = {
+    phrases:
+      phrases.map(
+        phrase => ({
+          ...phrase,
+          tags: [
+            ...(phrase.tags || [])
+          ]
+        })
+      ),
+
+    loaded: true
+  };
+
+
+  console.log(
+    `Successfully updated bin: ${binId}`
+  );
 }
 
 
 // =======================================================================
-// 16. FIND A BIN FOR A NEW PHRASE
-// =======================================================================
-//
-// IMPORTANT:
-// Existing phrases are NEVER moved.
-//
-// We only find a bin with enough remaining space.
+// 20. SAVE / UPDATE ONE PHRASE
 // =======================================================================
 
-async function findBinForNewPhrase(
+async function savePhraseToCloud(
   phrase
 ) {
 
-  const configuredBins =
-    JSONBIN_BIN_IDS.filter(
-      id => typeof id === 'string' && id.trim()
+  const existingBinId =
+    getPhraseBin(
+      phrase.id
     );
 
 
-  for (const binId of configuredBins) {
+  // ============================================================
+  // EXISTING PHRASE
+  // ============================================================
 
-    const current =
-      await fetchCurrentBin(binId);
+  if (existingBinId) {
 
-    const testPhrases = [
-      ...current.phrases,
+    const bin =
+      database.bins[
+        existingBinId
+      ];
+
+
+    if (!bin) {
+
+      throw new Error(
+        `Original bin ${existingBinId} is unavailable.`
+      );
+    }
+
+
+    const index =
+      bin.phrases.findIndex(
+        p =>
+          p.id === phrase.id
+      );
+
+
+    if (index === -1) {
+
+      throw new Error(
+        `Phrase ${phrase.id} ` +
+        `cannot be found in its original bin.`
+      );
+    }
+
+
+    // Preserve its exact position.
+    bin.phrases[index] = {
+      ...phrase
+    };
+
+
+    await writeBin(
+      existingBinId,
+      bin.phrases
+    );
+
+
+    return;
+  }
+
+
+  // ============================================================
+  // NEW PHRASE
+  // ============================================================
+
+  const targetBinId =
+    findBinForNewPhrase(
       phrase
+    );
+
+
+  if (!targetBinId) {
+
+    throw new Error(
+      'No loaded bin has enough safe space for this new phrase.'
+    );
+  }
+
+
+  const bin =
+    database.bins[
+      targetBinId
     ];
 
-    const payload = JSON.stringify({
-      status: current.status,
-      phrases: testPhrases
-    });
 
-    const size =
-      new Blob([payload]).size;
-
-    if (size < MAX_BIN_SIZE) {
-
-      return {
-        binId,
-        current
-      };
-    }
-  }
-
-
-  throw new Error(
-    'No JSONBin has enough available space for this phrase.'
-  );
-}
-
-
-// =======================================================================
-// 17. SAVE A NEW PHRASE
-// =======================================================================
-//
-// Only ONE bin is modified.
-// =======================================================================
-
-async function addPhraseToCloud(
-  phrase
-) {
-
-  const {
-    binId,
-    current
-  } = await findBinForNewPhrase(
+  // New phrase is appended.
+  // Existing phrases remain untouched.
+  bin.phrases.push(
     phrase
   );
 
 
-  // Make sure this ID doesn't already exist.
-  if (phraseBinMap[phrase.id]) {
+  // Register ownership BEFORE writing.
+  database.phraseToBin.set(
+    phrase.id,
+    targetBinId
+  );
 
-    throw new Error(
-      `Generated ID collision: ${phrase.id}`
+
+  try {
+
+    await writeBin(
+      targetBinId,
+      bin.phrases
     );
+
+  } catch (error) {
+
+    // Roll back local changes if cloud write fails.
+    bin.phrases.pop();
+
+    database.phraseToBin.delete(
+      phrase.id
+    );
+
+    throw error;
   }
-
-
-  const updated =
-    [
-      ...current.phrases,
-      phrase
-    ];
-
-
-  await writeBin(
-    binId,
-    updated,
-    current.status
-  );
-
-
-  // Update local index only AFTER cloud save succeeds.
-  phraseBinMap[phrase.id] =
-    binId;
-
-
-  localStorage.setItem(
-    BIN_INDEX_KEY,
-    JSON.stringify(phraseBinMap)
-  );
-
-
-  return binId;
 }
 
 
 // =======================================================================
-// 18. UPDATE AN EXISTING PHRASE
-// =======================================================================
-//
-// Only the bin containing this ID is modified.
-// =======================================================================
-
-async function updatePhraseInCloud(
-  phraseId,
-  updatedPhrase
-) {
-
-  const binId =
-    phraseBinMap[phraseId];
-
-
-  if (!binId) {
-
-    throw new Error(
-      `No bin mapping found for phrase ${phraseId}.`
-    );
-  }
-
-
-  const current =
-    await fetchCurrentBin(binId);
-
-
-  let found = false;
-
-
-  const updatedPhrases =
-    current.phrases.map(
-      phrase => {
-
-        if (String(phrase.id) === String(phraseId)) {
-
-          found = true;
-
-          return {
-            ...phrase,
-            ...updatedPhrase,
-            id: phraseId
-          };
-        }
-
-        return phrase;
-      }
-    );
-
-
-  if (!found) {
-
-    throw new Error(
-      `Phrase ${phraseId} was not found in bin ${binId}.`
-    );
-  }
-
-
-  // Validate the resulting database records.
-  updatedPhrases.forEach(
-    phrase => {
-
-      const validation =
-        validatePhrase(phrase);
-
-      if (!validation.valid) {
-
-        throw new Error(
-          `Refusing to save invalid record ` +
-          `${phrase.id}: ${validation.reason}`
-        );
-      }
-    }
-  );
-
-
-  await writeBin(
-    binId,
-    updatedPhrases,
-    current.status
-  );
-
-
-  return binId;
-}
-
-
-// =======================================================================
-// 19. DELETE AN EXISTING PHRASE
-// =======================================================================
-//
-// Again: only ONE bin is modified.
+// 21. DELETE ONE PHRASE FROM CLOUD
 // =======================================================================
 
 async function deletePhraseFromCloud(
-  phraseId
+  id
 ) {
 
   const binId =
-    phraseBinMap[phraseId];
+    getPhraseBin(id);
 
 
   if (!binId) {
 
     throw new Error(
-      `No bin mapping found for phrase ${phraseId}.`
+      `Cannot find database bin for phrase ${id}.`
     );
   }
 
 
-  const current =
-    await fetchCurrentBin(binId);
+  const bin =
+    database.bins[binId];
 
 
-  const before =
-    current.phrases.length;
-
-
-  const updatedPhrases =
-    current.phrases.filter(
-      phrase =>
-        String(phrase.id) !== String(phraseId)
-    );
-
-
-  if (updatedPhrases.length === before) {
+  if (!bin) {
 
     throw new Error(
-      `Phrase ${phraseId} was not found in bin ${binId}.`
+      `Database snapshot missing for bin ${binId}.`
     );
   }
 
 
-  await writeBin(
-    binId,
-    updatedPhrases,
-    current.status
-  );
+  const index =
+    bin.phrases.findIndex(
+      p =>
+        p.id === id
+    );
 
 
-  delete phraseBinMap[phraseId];
+  if (index === -1) {
 
+    throw new Error(
+      `Phrase ${id} not found in bin ${binId}.`
+    );
+  }
+
+
+  // Keep a backup in case PUT fails.
+  const previous =
+    [...bin.phrases];
+
+
+  bin.phrases =
+    bin.phrases.filter(
+      p =>
+        p.id !== id
+    );
+
+
+  try {
+
+    await writeBin(
+      binId,
+      bin.phrases
+    );
+
+
+    database.phraseToBin.delete(
+      id
+    );
+
+  } catch (error) {
+
+    // Roll back.
+    bin.phrases =
+      previous;
+
+    throw error;
+  }
+}
+
+
+// =======================================================================
+// 22. DELETE MULTIPLE PHRASES
+// =======================================================================
+//
+// Multiple selected phrases may belong to different bins.
+// We group them by bin and update each affected bin exactly once.
+// =======================================================================
+
+async function deleteMultipleFromCloud(
+  ids
+) {
+
+  const idsSet =
+    new Set(ids);
+
+
+  const affectedBins =
+    new Map();
+
+
+  // ------------------------------------------------------------
+  // Group deleted phrases by their original bin.
+  // ------------------------------------------------------------
+
+  for (const id of idsSet) {
+
+    const binId =
+      getPhraseBin(id);
+
+
+    if (!binId) {
+
+      throw new Error(
+        `Cannot determine bin for phrase ${id}.`
+      );
+    }
+
+
+    if (
+      !affectedBins.has(
+        binId
+      )
+    ) {
+
+      affectedBins.set(
+        binId,
+        []
+      );
+    }
+
+
+    affectedBins
+      .get(binId)
+      .push(id);
+  }
+
+
+  // ------------------------------------------------------------
+  // Backups
+  // ------------------------------------------------------------
+
+  const backups =
+    new Map();
+
+
+  for (
+    const [
+      binId,
+      idsInBin
+    ]
+    of affectedBins
+  ) {
+
+    const bin =
+      database.bins[binId];
+
+
+    if (!bin) {
+
+      throw new Error(
+        `Missing database snapshot for ${binId}.`
+      );
+    }
+
+
+    backups.set(
+      binId,
+      [...bin.phrases]
+    );
+
+
+    const remaining =
+      bin.phrases.filter(
+        phrase =>
+          !idsInBin.includes(
+            phrase.id
+          )
+      );
+
+
+    bin.phrases =
+      remaining;
+  }
+
+
+  try {
+
+    // ----------------------------------------------------------
+    // Update each affected bin ONCE.
+    // ----------------------------------------------------------
+
+    for (
+      const [
+        binId
+      ]
+      of affectedBins
+    ) {
+
+      await writeBin(
+        binId,
+        database.bins[binId].phrases
+      );
+    }
+
+
+    // ----------------------------------------------------------
+    // Remove ownership mappings.
+    // ----------------------------------------------------------
+
+    for (const id of idsSet) {
+
+      database.phraseToBin.delete(
+        id
+      );
+    }
+
+  } catch (error) {
+
+    // ----------------------------------------------------------
+    // Roll back every affected bin locally.
+    // ----------------------------------------------------------
+
+    for (
+      const [
+        binId,
+        backup
+      ]
+      of backups
+    ) {
+
+      database.bins[binId].phrases =
+        backup;
+    }
+
+
+    throw error;
+  }
+}
+
+
+// =======================================================================
+// 23. LOCAL CACHE
+// =======================================================================
+
+function saveLocalCache() {
+
+  try {
+
+    localStorage.setItem(
+      STORAGE_KEY,
+      JSON.stringify(
+        state.phrases
+      )
+    );
+
+  } catch (error) {
+
+    console.warn(
+      'Could not save local cache:',
+      error
+    );
+  }
+}
+
+
+// =======================================================================
+// 24. LOAD PINNED TAGS
+// =======================================================================
+
+function loadPinnedTags() {
+
+  try {
+
+    const raw =
+      localStorage.getItem(
+        PINNED_TAGS_KEY
+      );
+
+
+    state.pinnedTags =
+      raw
+        ? JSON.parse(raw)
+        : [];
+
+
+    if (
+      !Array.isArray(
+        state.pinnedTags
+      )
+    ) {
+
+      state.pinnedTags = [];
+    }
+
+  } catch {
+
+    state.pinnedTags = [];
+  }
+}
+
+
+// =======================================================================
+// 25. SAVE PINNED TAGS
+// =======================================================================
+
+function savePinnedTags() {
 
   localStorage.setItem(
-    BIN_INDEX_KEY,
-    JSON.stringify(phraseBinMap)
+    PINNED_TAGS_KEY,
+    JSON.stringify(
+      state.pinnedTags
+    )
   );
-
-
-  return binId;
 }
 
 
 // =======================================================================
-// 20. SAFE CLOUD SAVE HELPER
-// =======================================================================
-//
-// This replaces the old "rebuild all bins" save mechanism.
-//
-// There is intentionally NO function here that takes state.phrases
-// and rewrites all eight bins.
+// 26. TAGS
 // =======================================================================
 
-async function saveNewPhraseSafely(
-  phrase
+function getAllTags(
+  includePinned = false
 ) {
-
-  setSyncStatus('syncing');
-
-  try {
-
-    const binId =
-      await addPhraseToCloud(
-        phrase
-      );
-
-    localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify(state.phrases)
-    );
-
-    setSyncStatus('synced');
-
-    console.log(
-      `New phrase saved to bin ${binId}`
-    );
-
-    return true;
-
-  } catch (error) {
-
-    console.error(
-      'Failed to save new phrase:',
-      error
-    );
-
-    setSyncStatus('error');
-
-    showToast(
-      'Cloud save failed. Your database was not modified.'
-    );
-
-    return false;
-  }
-}
-
-
-async function updatePhraseSafely(
-  phraseId,
-  updatedPhrase
-) {
-
-  setSyncStatus('syncing');
-
-  try {
-
-    const binId =
-      await updatePhraseInCloud(
-        phraseId,
-        updatedPhrase
-      );
-
-    localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify(state.phrases)
-    );
-
-    setSyncStatus('synced');
-
-    console.log(
-      `Phrase ${phraseId} updated in bin ${binId}`
-    );
-
-    return true;
-
-  } catch (error) {
-
-    console.error(
-      'Failed to update phrase:',
-      error
-    );
-
-    setSyncStatus('error');
-
-    showToast(
-      'Cloud update failed. Your database was not modified.'
-    );
-
-    return false;
-  }
-}
-
-
-async function deletePhraseSafely(
-  phraseId
-) {
-
-  setSyncStatus('syncing');
-
-  try {
-
-    const binId =
-      await deletePhraseFromCloud(
-        phraseId
-      );
-
-    localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify(state.phrases)
-    );
-
-    setSyncStatus('synced');
-
-    console.log(
-      `Phrase ${phraseId} deleted from bin ${binId}`
-    );
-
-    return true;
-
-  } catch (error) {
-
-    console.error(
-      'Failed to delete phrase:',
-      error
-    );
-
-    setSyncStatus('error');
-
-    showToast(
-      'Cloud deletion failed. Your database was not modified.'
-    );
-
-    return false;
-  }
-}
-
-
-// =======================================================================
-// 21. TAG FUNCTIONS
-// =======================================================================
-
-function getAllTags(includePinned = false) {
 
   const counts = {};
+
 
   state.phrases.forEach(
     phrase => {
 
-      (phrase.tags || []).forEach(
+      (
+        phrase.tags || []
+      ).forEach(
         tag => {
 
           if (
             includePinned ||
-            !state.pinnedTags.includes(tag)
+            !state.pinnedTags.includes(
+              tag
+            )
           ) {
 
             counts[tag] =
@@ -1340,11 +1528,15 @@ function getAllTags(includePinned = false) {
   );
 
 
-  return Object.entries(counts)
+  return Object.entries(
+    counts
+  )
     .sort(
       (a, b) =>
         b[1] - a[1] ||
-        a[0].localeCompare(b[0])
+        a[0].localeCompare(
+          b[0]
+        )
     )
     .map(
       ([tag, count]) => ({
@@ -1356,7 +1548,7 @@ function getAllTags(includePinned = false) {
 
 
 // =======================================================================
-// 22. FILTERING
+// 27. FILTERING
 // =======================================================================
 
 function getFiltered() {
@@ -1376,11 +1568,15 @@ function getFiltered() {
         ) {
 
           const hasTag =
-            (phrase.tags || [])
-              .some(
-                tag =>
-                  state.activeTags.includes(tag)
-              );
+            (
+              phrase.tags || []
+            ).some(
+              tag =>
+                state.activeTags.includes(
+                  tag
+                )
+            );
+
 
           if (!hasTag) {
             return false;
@@ -1393,26 +1589,25 @@ function getFiltered() {
         }
 
 
-        const haystack = [
-
-          phrase.expression || '',
-
-          phrase.meaning || '',
-
-          ...(phrase.tags || [])
-
-        ]
-          .join(' ')
-          .toLowerCase();
+        const haystack =
+          [
+            phrase.text,
+            phrase.meaning || '',
+            ...(phrase.tags || [])
+          ]
+            .join(' ')
+            .toLowerCase();
 
 
-        return haystack.includes(q);
+        return haystack.includes(
+          q
+        );
       }
     );
 
 
   // ------------------------------------------------------------
-  // Random feed
+  // RANDOM HOME FEED
   // ------------------------------------------------------------
 
   if (
@@ -1428,14 +1623,15 @@ function getFiltered() {
 
       const j =
         Math.floor(
-          Math.random() * (i + 1)
+          Math.random() *
+          (i + 1)
         );
+
 
       [
         filtered[i],
         filtered[j]
-      ] =
-      [
+      ] = [
         filtered[j],
         filtered[i]
       ];
@@ -1443,7 +1639,10 @@ function getFiltered() {
 
 
     filtered =
-      filtered.slice(0, 20);
+      filtered.slice(
+        0,
+        20
+      );
 
   } else {
 
@@ -1460,7 +1659,7 @@ function getFiltered() {
 
 
 // =======================================================================
-// 23. RENDER
+// 28. MAIN RENDER
 // =======================================================================
 
 function render(
@@ -1469,28 +1668,29 @@ function render(
 
   renderTags();
   renderPinnedTags();
-  renderList(animateCards);
+  renderList(
+    animateCards
+  );
   renderCount();
 }
 
 
 // =======================================================================
-// 24. DATABASE COUNT
+// 29. TOTAL COUNT
 // =======================================================================
 
 function renderCount() {
 
-  const n =
-    state.databaseStats.unique ||
+  const count =
     state.phrases.length;
 
 
-  if (n === 0) {
+  if (count === 0) {
 
     els.count.textContent =
       'No phrases';
 
-  } else if (n === 1) {
+  } else if (count === 1) {
 
     els.count.textContent =
       '01 phrase';
@@ -1498,14 +1698,15 @@ function renderCount() {
   } else {
 
     els.count.textContent =
-      String(n).padStart(2, '0') +
+      String(count)
+        .padStart(2, '0') +
       ' phrases';
   }
 }
 
 
 // =======================================================================
-// 25. TAG FILTER RENDERING
+// 30. TAG FILTER UI
 // =======================================================================
 
 function renderTags() {
@@ -1514,11 +1715,14 @@ function renderTags() {
     getAllTags(false);
 
 
-  els.tagsFilter.innerHTML = '';
+  els.tagsFilter.innerHTML =
+    '';
 
 
   const all =
-    document.createElement('button');
+    document.createElement(
+      'button'
+    );
 
 
   all.className =
@@ -1542,46 +1746,59 @@ function renderTags() {
   };
 
 
-  els.tagsFilter.appendChild(all);
+  els.tagsFilter.appendChild(
+    all
+  );
 
 
   tags.forEach(
     ({ tag, count }) => {
 
-      const b =
-        document.createElement('button');
+      const button =
+        document.createElement(
+          'button'
+        );
 
 
-      b.className =
+      button.className =
         'tag-chip' +
         (
-          state.activeTags.includes(tag)
+          state.activeTags.includes(
+            tag
+          )
             ? ' active'
             : ''
         );
 
 
-      b.innerHTML = `
+      button.innerHTML = `
         ${escapeHtml(tag)}
-        <span class="count">${count}</span>
+
+        <span class="count">
+          ${count}
+        </span>
 
         <span class="tag-action pin">
-          <svg viewBox="0 0 24 24"
-               fill="none"
-               stroke="currentColor"
-               stroke-linecap="round"
-               stroke-linejoin="round">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
             <path d="M12 17v5"/>
-            <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/>
+            <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/>
           </svg>
         </span>
 
         <span class="tag-action delete">
-          <svg viewBox="0 0 24 24"
-               fill="none"
-               stroke="currentColor"
-               stroke-linecap="round"
-               stroke-linejoin="round">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
             <path d="M3 6h18"/>
             <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/>
             <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
@@ -1590,51 +1807,63 @@ function renderTags() {
       `;
 
 
-      b.onclick = () => {
+      button.onclick = () => {
 
         if (
-          !b.classList.contains('editing')
+          button.classList.contains(
+            'editing'
+          )
+        ) {
+          return;
+        }
+
+
+        if (
+          state.activeTags.includes(
+            tag
+          )
         ) {
 
-          if (
-            state.activeTags.includes(tag)
-          ) {
+          state.activeTags =
+            state.activeTags.filter(
+              t => t !== tag
+            );
 
-            state.activeTags =
-              state.activeTags.filter(
-                t => t !== tag
-              );
+        } else {
 
-          } else {
-
-            state.activeTags.push(tag);
-          }
-
-          render(false);
+          state.activeTags.push(
+            tag
+          );
         }
+
+
+        render(false);
       };
 
 
       attachTagHoldHandlers(
-        b,
+        button,
         tag,
         false
       );
 
 
-      els.tagsFilter.appendChild(b);
+      els.tagsFilter.appendChild(
+        button
+      );
     }
   );
 }
 
 
 // =======================================================================
-// 26. PINNED TAGS
+// 31. PINNED TAG UI
 // =======================================================================
 
 function renderPinnedTags() {
 
-  els.pinnedTagsFilter.innerHTML = '';
+  els.pinnedTagsFilter.innerHTML =
+    '';
 
 
   if (
@@ -1655,14 +1884,18 @@ function renderPinnedTags() {
   state.pinnedTags.forEach(
     tag => {
 
-      const b =
-        document.createElement('button');
+      const button =
+        document.createElement(
+          'button'
+        );
 
 
-      b.className =
+      button.className =
         'tag-chip pinned' +
         (
-          state.activeTags.includes(tag)
+          state.activeTags.includes(
+            tag
+          )
             ? ' active'
             : ''
         );
@@ -1670,32 +1903,41 @@ function renderPinnedTags() {
 
       const count =
         state.phrases.filter(
-          p =>
-            (p.tags || []).includes(tag)
+          phrase =>
+            (
+              phrase.tags || []
+            ).includes(tag)
         ).length;
 
 
-      b.innerHTML = `
+      button.innerHTML = `
         ${escapeHtml(tag)}
-        <span class="count">${count}</span>
+
+        <span class="count">
+          ${count}
+        </span>
 
         <span class="tag-action unpin">
-          <svg viewBox="0 0 24 24"
-               fill="none"
-               stroke="currentColor"
-               stroke-linecap="round"
-               stroke-linejoin="round">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
             <path d="M3 21l18-18"/>
             <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7"/>
           </svg>
         </span>
 
         <span class="tag-action delete">
-          <svg viewBox="0 0 24 24"
-               fill="none"
-               stroke="currentColor"
-               stroke-linecap="round"
-               stroke-linejoin="round">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
             <path d="M3 6h18"/>
             <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/>
             <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
@@ -1704,55 +1946,67 @@ function renderPinnedTags() {
       `;
 
 
-      b.onclick = () => {
+      button.onclick = () => {
 
         if (
-          !b.classList.contains('editing')
+          button.classList.contains(
+            'editing'
+          )
+        ) {
+          return;
+        }
+
+
+        if (
+          state.activeTags.includes(
+            tag
+          )
         ) {
 
-          if (
-            state.activeTags.includes(tag)
-          ) {
+          state.activeTags =
+            state.activeTags.filter(
+              t => t !== tag
+            );
 
-            state.activeTags =
-              state.activeTags.filter(
-                t => t !== tag
-              );
+        } else {
 
-          } else {
-
-            state.activeTags.push(tag);
-          }
-
-          render(false);
+          state.activeTags.push(
+            tag
+          );
         }
+
+
+        render(false);
       };
 
 
       attachTagHoldHandlers(
-        b,
+        button,
         tag,
         true
       );
 
 
-      els.pinnedTagsFilter.appendChild(b);
+      els.pinnedTagsFilter.appendChild(
+        button
+      );
     }
   );
 }
 
 
 // =======================================================================
-// 27. TAG HOLD HANDLERS
+// 32. TAG LONG-PRESS ACTIONS
 // =======================================================================
 
 function attachTagHoldHandlers(
-  btn,
+  button,
   tag,
   isPinned
 ) {
 
   let pressTimer = null;
+
 
   const start = () => {
 
@@ -1761,9 +2015,13 @@ function attachTagHoldHandlers(
         '.tag-chip.editing'
       )
       .forEach(
-        c => {
-          if (c !== btn) {
-            c.classList.remove(
+        chip => {
+
+          if (
+            chip !== button
+          ) {
+
+            chip.classList.remove(
               'editing'
             );
           }
@@ -1772,316 +2030,379 @@ function attachTagHoldHandlers(
 
 
     pressTimer =
-      setTimeout(() => {
+      setTimeout(
+        () => {
 
-        btn.classList.add(
-          'editing'
-        );
+          button.classList.add(
+            'editing'
+          );
 
-        if (navigator.vibrate) {
-          navigator.vibrate(10);
-        }
 
-        state.suppressClick = true;
+          if (
+            navigator.vibrate
+          ) {
 
-        setTimeout(() => {
-          state.suppressClick = false;
-        }, 100);
+            navigator.vibrate(
+              10
+            );
+          }
 
-      }, 480);
+
+          state.suppressClick =
+            true;
+
+
+          setTimeout(
+            () => {
+              state.suppressClick =
+                false;
+            },
+            100
+          );
+
+        },
+        480
+      );
   };
 
 
   const cancel = () => {
-    clearTimeout(pressTimer);
+
+    clearTimeout(
+      pressTimer
+    );
   };
 
 
-  btn.addEventListener(
+  button.addEventListener(
     'touchstart',
     start,
     { passive: true }
   );
 
-  btn.addEventListener(
+
+  button.addEventListener(
     'touchmove',
     cancel,
     { passive: true }
   );
 
-  btn.addEventListener(
+
+  button.addEventListener(
     'touchend',
     cancel
   );
 
-  btn.addEventListener(
+
+  button.addEventListener(
     'mousedown',
     start
   );
 
-  btn.addEventListener(
+
+  button.addEventListener(
     'mousemove',
     cancel
   );
 
-  btn.addEventListener(
+
+  button.addEventListener(
     'mouseup',
     cancel
   );
 
-  btn.addEventListener(
+
+  button.addEventListener(
     'mouseleave',
     cancel
   );
 
 
   const pinAction =
-    btn.querySelector(
+    button.querySelector(
       isPinned
         ? '.unpin'
         : '.pin'
     );
 
 
-  const delAction =
-    btn.querySelector('.delete');
+  const deleteAction =
+    button.querySelector(
+      '.delete'
+    );
 
 
   if (pinAction) {
 
-    pinAction.onclick = async e => {
+    pinAction.onclick =
+      event => {
 
-      e.stopPropagation();
+        event.stopPropagation();
 
-      if (isPinned) {
 
-        state.pinnedTags =
-          state.pinnedTags.filter(
-            t => t !== tag
-          );
+        if (isPinned) {
 
-      } else {
+          state.pinnedTags =
+            state.pinnedTags.filter(
+              t =>
+                t !== tag
+            );
 
-        state.pinnedTags.push(tag);
-      }
+        } else {
 
-      savePinnedTags();
+          if (
+            !state.pinnedTags.includes(
+              tag
+            )
+          ) {
 
-      render(false);
-    };
+            state.pinnedTags.push(
+              tag
+            );
+          }
+        }
+
+
+        savePinnedTags();
+
+        render(false);
+      };
   }
 
 
-  if (delAction) {
+  if (deleteAction) {
 
-    delAction.onclick = async e => {
+    deleteAction.onclick =
+      async event => {
 
-      e.stopPropagation();
+        event.stopPropagation();
 
-      await deleteTagFromAllCards(tag);
+        await deleteTagFromAllCards(
+          tag
+        );
 
-      if (isPinned) {
+        if (isPinned) {
 
-        state.pinnedTags =
-          state.pinnedTags.filter(
-            t => t !== tag
-          );
+          state.pinnedTags =
+            state.pinnedTags.filter(
+              t =>
+                t !== tag
+            );
 
-        savePinnedTags();
-      }
+          savePinnedTags();
+        }
 
-      render(false);
-    };
+        render(false);
+      };
   }
 }
 
 
 // =======================================================================
-// 28. DELETE TAG FROM ALL CARDS
+// 33. DELETE TAG FROM ALL CARDS
 // =======================================================================
 //
-// This legitimately modifies multiple bins.
-//
-// We determine which bins actually contain the affected phrases,
-// then update ONLY those bins.
+// This can affect multiple bins.
+// We group changes by bin and update each affected bin once.
 // =======================================================================
 
-async function deleteTagFromAllCards(tag) {
+async function deleteTagFromAllCards(
+  tag
+) {
 
-  const affectedIds = [];
+  // ------------------------------------------------------------
+  // Determine which bins contain this tag.
+  // ------------------------------------------------------------
 
-  state.phrases.forEach(
-    phrase => {
+  const changedBins =
+    new Map();
 
-      if (
-        (phrase.tags || []).includes(tag)
-      ) {
 
-        affectedIds.push(
-          phrase.id
-        );
-      }
+  for (
+    const [
+      binId,
+      bin
+    ]
+    of Object.entries(
+      database.bins
+    )
+  ) {
+
+    const hasTag =
+      bin.phrases.some(
+        phrase =>
+          (
+            phrase.tags || []
+          ).includes(tag)
+      );
+
+
+    if (!hasTag) {
+      continue;
     }
-  );
 
 
-  if (affectedIds.length === 0) {
+    // Safety: failed bins should never exist here.
+    if (
+      database.failedBins.has(
+        binId
+      )
+    ) {
+
+      throw new Error(
+        `Cannot modify failed bin ${binId}.`
+      );
+    }
+
+
+    changedBins.set(
+      binId,
+      bin.phrases.map(
+        phrase => ({
+          ...phrase,
+
+          tags:
+            (
+              phrase.tags || []
+            ).filter(
+              t =>
+                t !== tag
+            )
+        })
+      )
+    );
+  }
+
+
+  if (
+    changedBins.size === 0
+  ) {
+
+    showToast(
+      'Tag not found.'
+    );
+
     return;
   }
 
 
-  const affectedBins =
-    new Set();
-
-
-  affectedIds.forEach(
-    id => {
-
-      const binId =
-        phraseBinMap[id];
-
-      if (binId) {
-        affectedBins.add(binId);
-      }
-    }
-  );
-
-
   showToast(
-    `Updating ${affectedBins.size} bin(s)...`
+    `Updating ${changedBins.size} bin(s)...`
   );
 
 
-  setSyncStatus('syncing');
+  // Backups
+  const backups =
+    new Map();
+
+
+  for (
+    const [
+      binId
+    ]
+    of changedBins
+  ) {
+
+    backups.set(
+      binId,
+      database.bins[binId].phrases.map(
+        phrase => ({
+          ...phrase,
+          tags: [
+            ...(phrase.tags || [])
+          ]
+        })
+      )
+    );
+  }
 
 
   try {
 
     for (
-      const binId of affectedBins
+      const [
+        binId,
+        updatedPhrases
+      ]
+      of changedBins
     ) {
 
-      const current =
-        await fetchCurrentBin(binId);
-
-
-      const updated =
-        current.phrases.map(
-          phrase => {
-
-            if (
-              (phrase.tags || [])
-                .includes(tag)
-            ) {
-
-              return {
-                ...phrase,
-                tags:
-                  (phrase.tags || [])
-                    .filter(
-                      t => t !== tag
-                    )
-              };
-            }
-
-            return phrase;
-          }
-        );
+      database.bins[binId].phrases =
+        updatedPhrases;
 
 
       await writeBin(
         binId,
-        updated,
-        current.status
+        updatedPhrases
       );
     }
 
 
-    // Update local state only after all cloud writes succeed.
-    state.phrases.forEach(
-      phrase => {
+    // Update global state after success.
+    state.phrases =
+      state.phrases.map(
+        phrase => ({
 
-        phrase.tags =
-          (phrase.tags || [])
-            .filter(
-              t => t !== tag
-            );
-      }
-    );
+          ...phrase,
+
+          tags:
+            (
+              phrase.tags || []
+            ).filter(
+              t =>
+                t !== tag
+            )
+        })
+      );
 
 
-    localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify(state.phrases)
-    );
+    saveLocalCache();
 
-
-    setSyncStatus('synced');
 
     showToast(
-      'Tag deleted successfully.'
+      'Tag deleted.'
     );
-
 
   } catch (error) {
 
-    console.error(
-      'Tag deletion failed:',
-      error
-    );
+    // Roll back local bin snapshots.
+    for (
+      const [
+        binId,
+        backup
+      ]
+      of backups
+    ) {
 
-    setSyncStatus('error');
+      database.bins[binId].phrases =
+        backup;
+    }
 
-    showToast(
-      'Tag deletion failed. Check console.'
-    );
+
+    throw error;
   }
 }
 
 
 // =======================================================================
-// 29. PINNED TAG STORAGE
+// 34. RENDER LIST
 // =======================================================================
 
-function savePinnedTags() {
-
-  localStorage.setItem(
-    'phrases.pinnedTags',
-    JSON.stringify(
-      state.pinnedTags
-    )
-  );
-}
-
-
-function loadPinnedTags() {
-
-  const raw =
-    localStorage.getItem(
-      'phrases.pinnedTags'
-    );
-
-  state.pinnedTags =
-    raw
-      ? JSON.parse(raw)
-      : [];
-}
-
-
-// =======================================================================
-// 30. RENDER LIST
-// =======================================================================
-
-function renderList(animate) {
+function renderList(
+  animate
+) {
 
   const filtered =
     getFiltered();
 
 
-  els.list.innerHTML = '';
+  els.list.innerHTML =
+    '';
 
 
-  if (state.phrases.length === 0) {
+  if (
+    state.phrases.length === 0
+  ) {
 
     els.list.innerHTML = `
       <div class="empty-state">
@@ -2095,12 +2416,16 @@ function renderList(animate) {
   }
 
 
-  if (filtered.length === 0) {
+  if (
+    filtered.length === 0
+  ) {
 
     els.list.innerHTML =
-      `<div class="no-results">
-        Nothing matches your search.
-      </div>`;
+      `
+        <div class="no-results">
+          Nothing matches your search.
+        </div>
+      `;
 
     return;
   }
@@ -2110,7 +2435,9 @@ function renderList(animate) {
     (phrase, index) => {
 
       const card =
-        document.createElement('article');
+        document.createElement(
+          'article'
+        );
 
 
       card.className =
@@ -2122,11 +2449,14 @@ function renderList(animate) {
         );
 
 
-      if (state.selectionMode) {
+      if (
+        state.selectionMode
+      ) {
 
         card.classList.add(
           'selectable'
         );
+
 
         if (
           state.selectedIds.includes(
@@ -2149,16 +2479,26 @@ function renderList(animate) {
 
         card.style.animationDelay =
           (
-            Math.min(index, 8) *
-            35
-          ) + 'ms';
+            Math.min(
+              index,
+              8
+            ) * 35
+          ) +
+          'ms';
       }
 
 
-      let actionsHTML = '';
+      let actionsHTML =
+        '';
 
 
-      if (state.selectionMode) {
+      // ==========================================================
+      // SELECTION MODE
+      // ==========================================================
+
+      if (
+        state.selectionMode
+      ) {
 
         if (
           state.selectedIds.includes(
@@ -2169,25 +2509,30 @@ function renderList(animate) {
           actionsHTML = `
             <button
               class="selection-delete-btn"
-              aria-label="Delete selected">
-
-              <svg viewBox="0 0 24 24"
-                   fill="none"
-                   stroke="currentColor"
-                   stroke-width="2"
-                   stroke-linecap="round"
-                   stroke-linejoin="round">
-
+              aria-label="Delete selected"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
                 <path d="M3 6h18"/>
                 <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/>
                 <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
               </svg>
-
             </button>
           `;
         }
 
+
       } else {
+
+        // ========================================================
+        // NORMAL MODE
+        // ========================================================
 
         actionsHTML = `
           <div class="card-actions">
@@ -2195,62 +2540,57 @@ function renderList(animate) {
             <button
               class="action-btn select"
               data-action="select"
-              aria-label="Select phrase">
-
-              <svg viewBox="0 0 24 24"
-                   fill="none"
-                   stroke="currentColor"
-                   stroke-width="2"
-                   stroke-linecap="round"
-                   stroke-linejoin="round">
-
+              aria-label="Select phrase"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
                 <path d="M20 6 9 17l-5-5"/>
-
               </svg>
-
             </button>
-
 
             <button
               class="action-btn edit"
               data-action="edit"
-              aria-label="Edit phrase">
-
-              <svg viewBox="0 0 24 24"
-                   fill="none"
-                   stroke="currentColor"
-                   stroke-width="2"
-                   stroke-linecap="round"
-                   stroke-linejoin="round">
-
+              aria-label="Edit phrase"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
                 <path d="M12 20h9"/>
                 <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z"/>
-
               </svg>
-
             </button>
-
 
             <button
               class="action-btn delete"
               data-action="delete"
-              aria-label="Delete phrase">
-
-              <svg viewBox="0 0 24 24"
-                   fill="none"
-                   stroke="currentColor"
-                   stroke-width="2"
-                   stroke-linecap="round"
-                   stroke-linejoin="round">
-
+              aria-label="Delete phrase"
+            >
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+              >
                 <path d="M3 6h18"/>
                 <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/>
                 <path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
                 <line x1="10" y1="11" x2="10" y2="17"/>
                 <line x1="14" y1="11" x2="14" y2="17"/>
-
               </svg>
-
             </button>
 
           </div>
@@ -2260,20 +2600,16 @@ function renderList(animate) {
       }
 
 
-      // ----------------------------------------------------------
-      // IMPORTANT:
-      //
-      // Database field is "expression", NOT "text".
-      // ----------------------------------------------------------
+      // ==========================================================
+      // CARD HTML
+      // ==========================================================
 
       card.innerHTML = `
-
         <div class="phrase-text">
           ${escapeHtml(
-            phrase.expression
+            phrase.text
           )}
         </div>
-
 
         ${
           phrase.meaning
@@ -2287,31 +2623,32 @@ function renderList(animate) {
             : ''
         }
 
-
         ${
-          (phrase.tags || []).length
+          (
+            phrase.tags || []
+          ).length
             ? `
               <div class="phrase-tags">
-
                 ${
                   phrase.tags
                     .map(
                       tag =>
-                        `<span class="phrase-tag">
-                          ${escapeHtml(tag)}
-                        </span>`
+                        `
+                          <span class="phrase-tag">
+                            ${escapeHtml(
+                              tag
+                            )}
+                          </span>
+                        `
                     )
                     .join('')
                 }
-
               </div>
             `
             : ''
         }
 
-
         ${actionsHTML}
-
       `;
 
 
@@ -2321,10 +2658,16 @@ function renderList(animate) {
       );
 
 
-      els.list.appendChild(card);
+      els.list.appendChild(
+        card
+      );
     }
   );
 
+
+  // ------------------------------------------------------------
+  // RANDOM FEED MESSAGE
+  // ------------------------------------------------------------
 
   if (
     state.activeTags.length === 0 &&
@@ -2332,43 +2675,50 @@ function renderList(animate) {
     state.phrases.length > 20
   ) {
 
-    const msg =
-      document.createElement('div');
+    const message =
+      document.createElement(
+        'div'
+      );
 
 
-    msg.className =
+    message.className =
       'no-results';
 
 
-    msg.style.fontSize =
+    message.style.fontSize =
       '13px';
 
-    msg.style.fontStyle =
+    message.style.fontStyle =
       'normal';
 
-    msg.style.fontFamily =
+    message.style.fontFamily =
       'var(--sans)';
 
-    msg.style.color =
+    message.style.color =
       'var(--text-faint)';
 
-    msg.style.marginTop =
+    message.style.marginTop =
       '20px';
 
 
-    msg.innerHTML =
-      `Showing 20 random phrases out of ${
-        state.phrases.length
-      }.<br>Refresh the page to discover more.`;
+    message.innerHTML =
+      `
+        Showing 20 random phrases out of
+        ${state.phrases.length}.
+        <br>
+        Refresh the page to discover more.
+      `;
 
 
-    els.list.appendChild(msg);
+    els.list.appendChild(
+      message
+    );
   }
 }
 
 
 // =======================================================================
-// 31. CARD HANDLERS
+// 35. CARD HANDLERS
 // =======================================================================
 
 function attachCardHandlers(
@@ -2376,19 +2726,25 @@ function attachCardHandlers(
   phrase
 ) {
 
-  if (state.selectionMode) {
+  // ------------------------------------------------------------
+  // SELECTION MODE
+  // ------------------------------------------------------------
+
+  if (
+    state.selectionMode
+  ) {
 
     card.addEventListener(
       'click',
-      e => {
+      event => {
 
         if (
-          e.target.closest(
+          event.target.closest(
             '.selection-delete-btn'
           )
         ) {
 
-          e.stopPropagation();
+          event.stopPropagation();
 
           deleteSelected();
 
@@ -2402,9 +2758,14 @@ function attachCardHandlers(
       }
     );
 
+
     return;
   }
 
+
+  // ------------------------------------------------------------
+  // LONG PRESS
+  // ------------------------------------------------------------
 
   let pressTimer = null;
   let pressing = false;
@@ -2416,10 +2777,12 @@ function attachCardHandlers(
   const MOVE_THRESHOLD = 10;
 
 
-  function start(e) {
+  function start(event) {
 
     if (
-      e.target.closest('.action-btn')
+      event.target.closest(
+        '.action-btn'
+      )
     ) {
       return;
     }
@@ -2429,17 +2792,18 @@ function attachCardHandlers(
     longPressed = false;
 
 
-    const touch =
-      e.touches
-        ? e.touches[0]
-        : e;
+    const point =
+      event.touches
+        ? event.touches[0]
+        : event;
 
 
     startX =
-      touch.clientX;
+      point.clientX;
+
 
     startY =
-      touch.clientY;
+      point.clientY;
 
 
     card.classList.add(
@@ -2456,10 +2820,13 @@ function attachCardHandlers(
               '.phrase-card.revealed'
             )
             .forEach(
-              c => {
+              other => {
 
-                if (c !== card) {
-                  c.classList.remove(
+                if (
+                  other !== card
+                ) {
+
+                  other.classList.remove(
                     'revealed'
                   );
                 }
@@ -2471,6 +2838,7 @@ function attachCardHandlers(
             'revealed'
           );
 
+
           card.classList.remove(
             'pressing'
           );
@@ -2480,20 +2848,29 @@ function attachCardHandlers(
           longPressed = true;
 
 
-          if (navigator.vibrate) {
-            navigator.vibrate(12);
+          if (
+            navigator.vibrate
+          ) {
+
+            navigator.vibrate(
+              12
+            );
           }
 
 
-          state.suppressClick = true;
+          state.suppressClick =
+            true;
 
 
-          setTimeout(() => {
+          setTimeout(
+            () => {
 
-            state.suppressClick =
-              false;
+              state.suppressClick =
+                false;
 
-          }, 60);
+            },
+            60
+          );
 
         },
         480
@@ -2501,23 +2878,28 @@ function attachCardHandlers(
   }
 
 
-  function move(e) {
+  function move(event) {
 
-    if (!pressing) return;
+    if (!pressing) {
+      return;
+    }
 
 
-    const touch =
-      e.touches
-        ? e.touches[0]
-        : e;
+    const point =
+      event.touches
+        ? event.touches[0]
+        : event;
 
 
     if (
       Math.abs(
-        touch.clientX - startX
+        point.clientX -
+        startX
       ) > MOVE_THRESHOLD ||
+
       Math.abs(
-        touch.clientY - startY
+        point.clientY -
+        startY
       ) > MOVE_THRESHOLD
     ) {
 
@@ -2532,9 +2914,11 @@ function attachCardHandlers(
       pressTimer
     );
 
+
     card.classList.remove(
       'pressing'
     );
+
 
     pressing = false;
   }
@@ -2546,9 +2930,25 @@ function attachCardHandlers(
       pressTimer
     );
 
+
     card.classList.remove(
       'pressing'
     );
+
+
+    if (
+      !longPressed &&
+      pressing &&
+      card.classList.contains(
+        'revealed'
+      )
+    ) {
+
+      card.classList.remove(
+        'revealed'
+      );
+    }
+
 
     pressing = false;
   }
@@ -2597,29 +2997,35 @@ function attachCardHandlers(
   );
 
 
-  const selectBtn =
+  // ------------------------------------------------------------
+  // ACTION BUTTONS
+  // ------------------------------------------------------------
+
+  const selectButton =
     card.querySelector(
       '[data-action="select"]'
     );
 
-  const editBtn =
+
+  const editButton =
     card.querySelector(
       '[data-action="edit"]'
     );
 
-  const delBtn =
+
+  const deleteButton =
     card.querySelector(
       '[data-action="delete"]'
     );
 
 
-  if (selectBtn) {
+  if (selectButton) {
 
-    selectBtn.addEventListener(
+    selectButton.addEventListener(
       'click',
-      e => {
+      event => {
 
-        e.stopPropagation();
+        event.stopPropagation();
 
         enterSelectionMode(
           phrase.id
@@ -2629,13 +3035,13 @@ function attachCardHandlers(
   }
 
 
-  if (editBtn) {
+  if (editButton) {
 
-    editBtn.addEventListener(
+    editButton.addEventListener(
       'click',
-      e => {
+      event => {
 
-        e.stopPropagation();
+        event.stopPropagation();
 
         openModal(
           phrase.id
@@ -2645,13 +3051,13 @@ function attachCardHandlers(
   }
 
 
-  if (delBtn) {
+  if (deleteButton) {
 
-    delBtn.addEventListener(
+    deleteButton.addEventListener(
       'click',
-      e => {
+      event => {
 
-        e.stopPropagation();
+        event.stopPropagation();
 
         deletePhrase(
           phrase.id
@@ -2663,18 +3069,23 @@ function attachCardHandlers(
 
 
 // =======================================================================
-// 32. SELECTION
+// 36. SELECTION
 // =======================================================================
 
-function toggleSelection(id) {
+function toggleSelection(
+  id
+) {
 
   if (
-    state.selectedIds.includes(id)
+    state.selectedIds.includes(
+      id
+    )
   ) {
 
     state.selectedIds =
       state.selectedIds.filter(
-        i => i !== id
+        selectedId =>
+          selectedId !== id
       );
 
 
@@ -2689,7 +3100,9 @@ function toggleSelection(id) {
 
   } else {
 
-    state.selectedIds.push(id);
+    state.selectedIds.push(
+      id
+    );
   }
 
 
@@ -2699,11 +3112,17 @@ function toggleSelection(id) {
 }
 
 
-function enterSelectionMode(id) {
+function enterSelectionMode(
+  id
+) {
 
-  state.selectionMode = true;
+  state.selectionMode =
+    true;
 
-  state.selectedIds = [id];
+
+  state.selectedIds =
+    [id];
+
 
   updateSelectionUI();
 
@@ -2740,10 +3159,13 @@ function toggleSelectionMode() {
     !state.selectionMode;
 
 
-  state.selectedIds = [];
+  state.selectedIds =
+    [];
 
 
-  if (!state.selectionMode) {
+  if (
+    !state.selectionMode
+  ) {
 
     els.selectionBar.classList.remove(
       'show'
@@ -2758,11 +3180,7 @@ function toggleSelectionMode() {
 
 
 // =======================================================================
-// 33. DELETE SELECTED
-// =======================================================================
-//
-// Groups selected records by their bin.
-// Each affected bin is modified once.
+// 37. DELETE SELECTED
 // =======================================================================
 
 async function deleteSelected() {
@@ -2771,87 +3189,29 @@ async function deleteSelected() {
     [...state.selectedIds];
 
 
-  if (ids.length === 0) {
+  if (
+    ids.length === 0
+  ) {
     return;
   }
 
 
-  const affectedBins =
-    new Map();
-
-
-  ids.forEach(
-    id => {
-
-      const binId =
-        phraseBinMap[id];
-
-      if (!binId) return;
-
-
-      if (
-        !affectedBins.has(binId)
-      ) {
-
-        affectedBins.set(
-          binId,
-          new Set()
-        );
-      }
-
-
-      affectedBins
-        .get(binId)
-        .add(id);
-    }
-  );
-
-
-  if (affectedBins.size === 0) {
-
-    showToast(
-      'Could not locate selected phrases.'
-    );
-
-    return;
-  }
-
-
-  setSyncStatus('syncing');
+  const count =
+    ids.length;
 
 
   try {
 
-    for (
-      const [
-        binId,
-        idsInBin
-      ]
-      of affectedBins
-    ) {
-
-      const current =
-        await fetchCurrentBin(binId);
+    showToast(
+      `Deleting ${count} phrase(s)...`
+    );
 
 
-      const updated =
-        current.phrases.filter(
-          phrase =>
-            !idsInBin.has(
-              phrase.id
-            )
-        );
+    await deleteMultipleFromCloud(
+      ids
+    );
 
 
-      await writeBin(
-        binId,
-        updated,
-        current.status
-      );
-    }
-
-
-    // Only update local state after cloud success.
     state.phrases =
       state.phrases.filter(
         phrase =>
@@ -2861,32 +3221,15 @@ async function deleteSelected() {
       );
 
 
-    ids.forEach(
-      id => {
-        delete phraseBinMap[id];
-      }
-    );
+    state.selectedIds =
+      [];
 
 
-    localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify(
-        state.phrases
-      )
-    );
+    state.selectionMode =
+      false;
 
 
-    localStorage.setItem(
-      BIN_INDEX_KEY,
-      JSON.stringify(
-        phraseBinMap
-      )
-    );
-
-
-    state.selectedIds = [];
-
-    state.selectionMode = false;
+    saveLocalCache();
 
     updateSelectionUI();
 
@@ -2894,848 +3237,9 @@ async function deleteSelected() {
 
     setSyncStatus('synced');
 
-    showToast(
-      `${ids.length} phrase(s) deleted.`
-    );
-
 
   } catch (error) {
 
     console.error(
-      'Bulk deletion failed:',
-      error
-    );
-
-    setSyncStatus('error');
-
-    showToast(
-      'Deletion failed. Database was not fully modified.'
-    );
-  }
-}
-
-
-// =======================================================================
-// 34. GLOBAL CLICK
-// =======================================================================
-
-document.addEventListener(
-  'click',
-  e => {
-
-    if (state.suppressClick) {
-      return;
-    }
-
-
-    if (
-      e.target.closest('.action-btn')
-    ) {
-      return;
-    }
-
-
-    if (
-      e.target.closest('.tag-action')
-    ) {
-      return;
-    }
-
-
-    document
-      .querySelectorAll(
-        '.tag-chip.editing'
-      )
-      .forEach(
-        c =>
-          c.classList.remove(
-            'editing'
-          )
-      );
-
-
-    const card =
-      e.target.closest(
-        '.phrase-card'
-      );
-
-
-    if (
-      card &&
-      card.classList.contains(
-        'revealed'
-      )
-    ) {
-      return;
-    }
-
-
-    document
-      .querySelectorAll(
-        '.phrase-card.revealed'
-      )
-      .forEach(
-        c =>
-          c.classList.remove(
-            'revealed'
-          )
-      );
-  }
-);
-
-
-// =======================================================================
-// 35. MODAL
-// =======================================================================
-
-function openModal(id = null) {
-
-  document
-    .querySelectorAll(
-      '.phrase-card.revealed'
-    )
-    .forEach(
-      c =>
-        c.classList.remove(
-          'revealed'
-        )
-    );
-
-
-  state.editingId = id;
-
-  state.draftTags = [];
-
-
-  if (id) {
-
-    const phrase =
-      state.phrases.find(
-        p => p.id === id
-      );
-
-
-    if (!phrase) {
-      return;
-    }
-
-
-    els.modalTitle.textContent =
-      'Edit phrase';
-
-
-    els.phraseInput.value =
-      phrase.expression || '';
-
-
-    els.meaningInput.value =
-      phrase.meaning || '';
-
-
-    state.draftTags =
-      [...(phrase.tags || [])];
-
-
-    els.saveBtn.textContent =
-      'Update phrase';
-
-
-  } else {
-
-    els.modalTitle.textContent =
-      'New phrase';
-
-
-    els.form.reset();
-
-
-    state.draftTags = [];
-
-
-    els.saveBtn.textContent =
-      'Save phrase';
-  }
-
-
-  renderTagEditor();
-
-  renderSuggestions();
-
-
-  els.modal.classList.add(
-    'open'
-  );
-
-
-  document.body.style.overflow =
-    'hidden';
-
-
-  setTimeout(
-    () =>
-      els.phraseInput.focus(),
-    280
-  );
-}
-
-
-function closeModal() {
-
-  els.modal.classList.remove(
-    'open'
-  );
-
-
-  document.body.style.overflow =
-    '';
-
-
-  state.editingId = null;
-
-  state.draftTags = [];
-}
-
-
-// =======================================================================
-// 36. TAG EDITOR
-// =======================================================================
-
-function renderTagEditor() {
-
-  [...els.tagEditor.children]
-    .forEach(
-      child => {
-
-        if (
-          child !== els.tagInput
-        ) {
-
-          child.remove();
-        }
-      }
-    );
-
-
-  state.draftTags.forEach(
-    tag => {
-
-      const pill =
-        document.createElement(
-          'span'
-        );
-
-
-      pill.className =
-        'tag-pill';
-
-
-      pill.innerHTML =
-        `${escapeHtml(tag)}
-         <button
-           type="button"
-           class="remove"
-           aria-label="Remove ${escapeHtml(tag)}">
-           ×
-         </button>`;
-
-
-      pill
-        .querySelector('.remove')
-        .onclick = () => {
-
-          state.draftTags =
-            state.draftTags.filter(
-              t => t !== tag
-            );
-
-          renderTagEditor();
-
-          renderSuggestions();
-        };
-
-
-      els.tagEditor.insertBefore(
-        pill,
-        els.tagInput
-      );
-    }
-  );
-}
-
-
-function renderSuggestions() {
-
-  const all =
-    getAllTags(true)
-      .map(
-        item => item.tag
-      );
-
-
-  const available =
-    all
-      .filter(
-        tag =>
-          !state.draftTags.includes(
-            tag
-          )
-      )
-      .slice(0, 8);
-
-
-  els.tagSuggestions.innerHTML =
-    '';
-
-
-  if (
-    available.length === 0
-  ) {
-
-    els.tagSuggestions.style.display =
-      'none';
-
-    return;
-  }
-
-
-  els.tagSuggestions.style.display =
-    'flex';
-
-
-  available.forEach(
-    tag => {
-
-      const b =
-        document.createElement(
-          'button'
-        );
-
-
-      b.type =
-        'button';
-
-      b.className =
-        'tag-suggestion';
-
-      b.textContent =
-        '+ ' + tag;
-
-
-      b.onclick = () => {
-
-        if (
-          !state.draftTags.includes(tag)
-        ) {
-
-          state.draftTags.push(tag);
-
-          renderTagEditor();
-
-          renderSuggestions();
-        }
-      };
-
-
-      els.tagSuggestions.appendChild(b);
-    }
-  );
-}
-
-
-function addTagFromInput() {
-
-  let value =
-    els.tagInput.value.trim();
-
-
-  value =
-    value
-      .replace(/,+$/, '')
-      .trim();
-
-
-  if (!value) {
-    return;
-  }
-
-
-  if (value.length > 30) {
-
-    value =
-      value.slice(0, 30);
-  }
-
-
-  if (
-    !state.draftTags.includes(value)
-  ) {
-
-    state.draftTags.push(value);
-  }
-
-
-  renderTagEditor();
-
-  renderSuggestions();
-
-
-  els.tagInput.value =
-    '';
-}
-
-
-els.tagInput.addEventListener(
-  'keydown',
-  e => {
-
-    if (
-      e.key === 'Enter' ||
-      e.key === ',' ||
-      e.key === 'Tab'
-    ) {
-
-      if (
-        els.tagInput.value.trim()
-      ) {
-
-        e.preventDefault();
-
-        addTagFromInput();
-      }
-
-
-    } else if (
-      e.key === 'Backspace' &&
-      !els.tagInput.value &&
-      state.draftTags.length
-    ) {
-
-      state.draftTags.pop();
-
-      renderTagEditor();
-
-      renderSuggestions();
-    }
-  }
-);
-
-
-els.tagEditor.addEventListener(
-  'click',
-  e => {
-
-    if (
-      e.target === els.tagEditor
-    ) {
-
-      els.tagInput.focus();
-    }
-  }
-);
-
-
-// =======================================================================
-// 37. CREATE / EDIT PHRASE
-// =======================================================================
-
-async function savePhrase(e) {
-
-  e.preventDefault();
-
-
-  if (
-    els.tagInput.value.trim()
-  ) {
-
-    addTagFromInput();
-  }
-
-
-  const expression =
-    els.phraseInput.value.trim();
-
-
-  const meaning =
-    els.meaningInput.value.trim();
-
-
-  if (!expression) {
-
-    els.phraseInput.focus();
-
-    return;
-  }
-
-
-  // ============================================================
-  // EDIT EXISTING
-  // ============================================================
-
-  if (state.editingId) {
-
-    const phrase =
-      state.phrases.find(
-        p =>
-          p.id === state.editingId
-      );
-
-
-    if (!phrase) {
-
-      showToast(
-        'Phrase no longer exists.'
-      );
-
-      return;
-    }
-
-
-    const updatedPhrase = {
-
-      id: phrase.id,
-
-      expression,
-
-      tags: [
-        ...state.draftTags
-      ]
-    };
-
-
-    if (meaning) {
-
-      updatedPhrase.meaning =
-        meaning;
-    }
-
-
-    showToast(
-      'Updating cloud...'
-    );
-
-
-    const success =
-      await updatePhraseSafely(
-        phrase.id,
-        updatedPhrase
-      );
-
-
-    if (!success) {
-      return;
-    }
-
-
-    // Update local state AFTER cloud success.
-    Object.assign(
-      phrase,
-      updatedPhrase
-    );
-
-
-    localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify(
-        state.phrases
-      )
-    );
-
-
-    render(false);
-
-    closeModal();
-
-
-    return;
-  }
-
-
-  // ============================================================
-  // CREATE NEW
-  // ============================================================
-
-  const newPhrase = {
-
-    id: uid(),
-
-    expression,
-
-    tags: [
-      ...state.draftTags
-    ],
-
-    createdAt: Date.now()
-  };
-
-
-  // Include meaning only if supplied.
-  if (meaning) {
-
-    newPhrase.meaning =
-      meaning;
-  }
-
-
-  showToast(
-    'Saving to cloud...'
-  );
-
-
-  // IMPORTANT:
-  // We do NOT add it to state yet.
-  //
-  // The cloud must succeed first.
-  const success =
-    await saveNewPhraseSafely(
-      newPhrase
-    );
-
-
-  if (!success) {
-
-    showToast(
-      'Phrase was NOT added. Cloud save failed.'
-    );
-
-    return;
-  }
-
-
-  // Cloud succeeded.
-  state.phrases.unshift(
-    newPhrase
-  );
-
-
-  localStorage.setItem(
-    STORAGE_KEY,
-    JSON.stringify(
-      state.phrases
-    )
-  );
-
-
-  render(false);
-
-  closeModal();
-
-
-  showToast(
-    'Phrase saved successfully.'
-  );
-}
-
-
-// =======================================================================
-// 38. DELETE ONE PHRASE
-// =======================================================================
-
-async function deletePhrase(id) {
-
-  const phrase =
-    state.phrases.find(
-      p => p.id === id
-    );
-
-
-  if (!phrase) {
-    return;
-  }
-
-
-  showToast(
-    'Deleting from cloud...'
-  );
-
-
-  const success =
-    await deletePhraseSafely(
-      id
-    );
-
-
-  if (!success) {
-    return;
-  }
-
-
-  state.phrases =
-    state.phrases.filter(
-      p => p.id !== id
-    );
-
-
-  localStorage.setItem(
-    STORAGE_KEY,
-    JSON.stringify(
-      state.phrases
-    )
-  );
-
-
-  render(false);
-
-  showToast(
-    'Phrase deleted.'
-  );
-}
-
-
-// =======================================================================
-// 39. EVENT WIRING
-// =======================================================================
-
-els.addBtn.addEventListener(
-  'click',
-  () =>
-    openModal()
-);
-
-
-els.btnDeleteSelected.addEventListener(
-  'click',
-  deleteSelected
-);
-
-
-els.btnCancelSelection.addEventListener(
-  'click',
-  toggleSelectionMode
-);
-
-
-els.modalClose.addEventListener(
-  'click',
-  closeModal
-);
-
-
-els.modal.addEventListener(
-  'click',
-  e => {
-
-    if (
-      e.target === els.modal
-    ) {
-
-      closeModal();
-    }
-  }
-);
-
-
-els.form.addEventListener(
-  'submit',
-  savePhrase
-);
-
-
-els.searchInput.addEventListener(
-  'input',
-  e => {
-
-    state.search =
-      e.target.value;
-
-
-    els.clearBtn.style.display =
-      state.search
-        ? 'flex'
-        : 'none';
-
-
-    renderList(false);
-  }
-);
-
-
-els.clearBtn.addEventListener(
-  'click',
-  () => {
-
-    els.searchInput.value =
-      '';
-
-    state.search =
-      '';
-
-    els.clearBtn.style.display =
-      'none';
-
-    renderList(false);
-
-    els.searchInput.focus();
-  }
-);
-
-
-document.addEventListener(
-  'keydown',
-  e => {
-
-    if (
-      e.key === 'Escape' &&
-      els.modal.classList.contains(
-        'open'
-      )
-    ) {
-
-      closeModal();
-    }
-
-
-    if (
-      e.key === 'Escape' &&
-      state.selectionMode
-    ) {
-
-      toggleSelectionMode();
-    }
-  }
-);
-
-
-// =======================================================================
-// 40. INITIALIZATION
-// =======================================================================
-
-async function init() {
-
-  try {
-
-    loadPinnedTags();
-
-    await loadFromCloud();
-
-    render(true);
-
-
-    console.log(
-      '%cPhrases initialized successfully.',
-      'font-weight:bold'
-    );
-
-
-    console.log(
-      'Total unique phrases:',
-      state.databaseStats.unique
-    );
-
-
-  } catch (error) {
-
-    console.error(
-      'Initialization failed:',
-      error
-    );
-
-    setSyncStatus('error');
-
-    showToast(
-      'Initialization failed. Check console.'
-    );
-  }
-}
-
-
-init();
+      'Bulk delete failed:',
+     
