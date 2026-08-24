@@ -6,10 +6,13 @@
 // 1. JSONBIN.IO CONFIGURATION
 // Paste your Bin ID and API Key (X-Master-Key) below.
 // =======================================================================
-const JSONBIN_BIN_ID = "6a89e35cf5f4af5e29361a4b"; 
+const JSONBIN_BIN_IDS = [
+  "6a89e35cf5f4af5e29361a4b", 
+  "PASTE_YOUR_SECOND_BIN_ID_HERE",
+  "PASTE_YOUR_THIRD_BIN_ID_HERE"
+]; 
 const JSONBIN_API_KEY = "$2a$10$L0fsuyD5N.QZur7p94vrd.MUgYSsBM3e85EwILBEzY8B0FMSOrWIO";
-const phraseBinMap = {}; // <--- ADD THIS LINE
-// =======================================================================
+const phraseBinMap = {}; // =======================================================================
 
 const STORAGE_KEY = 'phrases.local.cache'; 
 
