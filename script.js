@@ -1,5 +1,6 @@
 // ============================================================
 // Phrases — a personal lexicon (JSONBin.io Cloud Edition)
+// FIXED VERSION — prevents partial-load overwrites + stabilizes count
 // ============================================================
 
 // =======================================================================
@@ -7,6 +8,7 @@
 // Paste your Bin ID and API Key (X-Master-Key) below.
 // =======================================================================
 const JSONBIN_BIN_IDS = [
+  // ← PUT YOUR 8 REAL BIN IDs HERE (no empty strings)
   "6a8c8eb1f5f4af5e293d4c7d", 
   "6a8ae059f5f4af5e2938446a",
   "6a8c93e2f5f4af5e293d6012",
@@ -15,11 +17,16 @@ const JSONBIN_BIN_IDS = [
   "6a8cb032f5f4af5e293dbe46",
   "6a8cb11df5f4af5e293dc17c",
   "6a8cb1eff5f4af5e293dc3f5"
-]; 
-const JSONBIN_API_KEY = "$2a$10$0dH1LXansfpglhcBp0tRzuqI.DBNyYqAF2iQxCH4fIOhn4MmK02au";
-const phraseBinMap = {}; // =======================================================================
+];
+const JSONBIN_API_KEY = "$2a$10$0dH1LXansfpglhcBp0tRzuqI.DBNyYqAF2iQxCH4fIOhn4MmK02au"; // ← your X-Master-Key
+const phraseBinMap = {};
 
-const STORAGE_KEY = 'phrases.local.cache'; 
+// =======================================================================
+
+const STORAGE_KEY = 'phrases.local.cache';
+
+// Track whether the last cloud load got data from every bin
+let lastLoadComplete = false;
 
 // ============ State ============
 const state = {
@@ -72,6 +79,8 @@ function setSyncStatus(status) {
 
 // Helper function to fetch a bin with a retry if it fails
 async function fetchBinData(binId, retries = 2) {
+  if (!binId || !binId.trim()) return null;
+
   try {
     const res = await fetch(`https://api.jsonbin.io/v3/b/${binId}/latest`, {
       method: 'GET',
@@ -80,9 +89,9 @@ async function fetchBinData(binId, retries = 2) {
     if (!res.ok) throw new Error(`Status: ${res.status}`);
     return await res.json();
   } catch (err) {
-    // If it fails, wait 600ms and try again (up to 2 times)
+    // If it fails, wait 700ms and try again (up to 2 times)
     if (retries > 0) {
-      await new Promise(r => setTimeout(r, 600)); 
+      await new Promise(r => setTimeout(r, 700));
       return fetchBinData(binId, retries - 1);
     }
     console.warn(`Failed to load bin ${binId} after retries:`, err);
@@ -93,98 +102,145 @@ async function fetchBinData(binId, retries = 2) {
 
 async function loadFromCloud() {
   setSyncStatus('syncing');
-  try {
-    // Reset the bin map to accurately reflect the current cloud state
-    for (let id in phraseBinMap) delete phraseBinMap[id];
+  lastLoadComplete = false;
 
-    // Fetch all bins in parallel using the retry helper
-    const fetchPromises = JSONBIN_BIN_IDS.map(id => fetchBinData(id));
-    const results = await Promise.all(fetchPromises);
-    
-    const allPhrases = [];
+  // Reset the bin map to accurately reflect the current cloud state
+  for (let id in phraseBinMap) delete phraseBinMap[id];
 
-    results.forEach((data, index) => {
-      const binId = JSONBIN_BIN_IDS[index];
-      if (!data || !data.record) return; // Skip if data is completely missing
+  // Fetch all bins in parallel using the retry helper
+  const fetchPromises = JSONBIN_BIN_IDS.map(id => fetchBinData(id));
+  const results = await Promise.all(fetchPromises);
 
-      // Handle data whether it's wrapped in { phrases: [] } or just a raw array []
-      let phrases = [];
-      if (Array.isArray(data.record.phrases)) {
-        phrases = data.record.phrases;
-      } else if (Array.isArray(data.record)) {
-        phrases = data.record;
+  const allPhrases = [];
+  let successCount = 0;
+  const validBinCount = JSONBIN_BIN_IDS.filter(id => id && id.trim()).length;
+
+  results.forEach((data, index) => {
+    const binId = JSONBIN_BIN_IDS[index];
+    if (!data || !data.record) return; // Skip if data is completely missing
+
+    successCount++;
+
+    // Handle data whether it's wrapped in { phrases: [] } or just a raw array []
+    let phrases = [];
+    if (Array.isArray(data.record.phrases)) {
+      phrases = data.record.phrases;
+    } else if (Array.isArray(data.record)) {
+      phrases = data.record;
+    } else {
+      console.warn(`Unexpected data shape in bin ${binId}`);
+      return;
+    }
+
+    phrases.forEach(p => {
+      // Skip broken entries (this was causing "undefined" sentences)
+      if (!p || typeof p.text !== 'string' || !p.text.trim()) {
+        console.warn('Skipping invalid phrase (missing text):', p);
+        return;
       }
 
-      phrases.forEach(p => {
-        // If a phrase doesn't have an ID, generate one so it isn't skipped
-        if (!p.id) p.id = uid();
-        
-        // Only add it if we haven't seen this ID in another bin
-        if (!phraseBinMap[p.id]) { 
-          allPhrases.push(p);
-          phraseBinMap[p.id] = binId; 
-        }
-      });
-    });
+      // Prefer existing stable ID. Only generate if truly missing.
+      if (!p.id) {
+        p.id = uid();
+        console.warn('Generated ID for phrase that was missing one:', p.text.slice(0, 50));
+      }
 
-    state.phrases = allPhrases;
-    
-    // Save combined array to local cache
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state.phrases));
+      // Normalize fields
+      p.meaning = typeof p.meaning === 'string' ? p.meaning : '';
+      p.tags = Array.isArray(p.tags) ? p.tags : [];
+      p.createdAt = p.createdAt || Date.now();
+
+      // Only add it if we haven't seen this ID in another bin
+      if (!phraseBinMap[p.id]) {
+        allPhrases.push(p);
+        phraseBinMap[p.id] = binId;
+      }
+    });
+  });
+
+  state.phrases = allPhrases;
+
+  // Decide if the load was complete
+  lastLoadComplete = (successCount === validBinCount && validBinCount > 0);
+
+  // Save combined array to local cache
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state.phrases));
+
+  if (lastLoadComplete) {
     setSyncStatus('synced');
     return true;
-  } catch (e) {
-    console.warn('Cloud load failed completely, trying local cache:', e);
+  } else {
     setSyncStatus('error');
-    
-    const raw = localStorage.getItem(STORAGE_KEY);
-    state.phrases = raw ? JSON.parse(raw) : [];
-    showToast('Offline: Showing last saved phrases');
+    showToast(`Partial load (${successCount}/${validBinCount} bins). Save is blocked to protect your data.`);
+    console.warn('Partial cloud load detected — saveToCloud will refuse to run until a full load succeeds');
     return false;
   }
 }
 
 async function saveToCloud() {
+  // ========== CRITICAL SAFETY ==========
+  // Never overwrite cloud data if the previous load was incomplete.
+  // This is the main cause of data loss / disappearing phrases.
+  if (!lastLoadComplete) {
+    showToast('Cannot save: last load was incomplete. Refresh the page first.');
+    setSyncStatus('error');
+    return false;
+  }
+
   setSyncStatus('syncing');
   try {
     const binsData = {};
-    JSONBIN_BIN_IDS.forEach(id => binsData[id] = []);
+    JSONBIN_BIN_IDS.forEach(id => {
+      if (id && id.trim()) binsData[id] = [];
+    });
 
     const MAX_BIN_SIZE = 90000; // 90KB limit to be safe (JSONBin max is 100kb)
     let binsAreFull = false;
 
     state.phrases.forEach(p => {
+      if (!p || !p.id || !p.text) return; // extra safety
+
       let targetBin = phraseBinMap[p.id];
-      
+
       // If it's a new phrase, find a bin that has enough space
       if (!targetBin) {
-        targetBin = JSONBIN_BIN_IDS[JSONBIN_BIN_IDS.length - 1]; // fallback to the last bin
-        
+        targetBin = null;
+
         for (let i = 0; i < JSONBIN_BIN_IDS.length; i++) {
           const binId = JSONBIN_BIN_IDS[i];
-          const currentPayload = JSON.stringify({ status: "active", phrases: binsData[binId] });
-          
-          // Check size in bytes
+          if (!binId || !binId.trim()) continue;
+
+          const currentPayload = JSON.stringify({ status: "active", phrases: binsData[binId] || [] });
           if (new Blob([currentPayload]).size < MAX_BIN_SIZE) {
             targetBin = binId;
             break;
           }
         }
-        
-        // If we couldn't find a bin with space, we fallback to the last bin, but flag it as full
-        const fallbackPayload = JSON.stringify({ status: "active", phrases: binsData[targetBin] });
-        if (new Blob([fallbackPayload]).size >= MAX_BIN_SIZE) {
-          binsAreFull = true;
+
+        // fallback to last valid bin
+        if (!targetBin) {
+          targetBin = JSONBIN_BIN_IDS.filter(id => id && id.trim()).pop();
+        }
+
+        // If we still couldn't find space, flag it
+        if (targetBin) {
+          const fallbackPayload = JSON.stringify({ status: "active", phrases: binsData[targetBin] || [] });
+          if (new Blob([fallbackPayload]).size >= MAX_BIN_SIZE) {
+            binsAreFull = true;
+          }
         }
       }
-      
+
+      if (!targetBin) return; // should never happen if bins are configured
+
       // Add phrase to its bin and update the map
+      binsData[targetBin] = binsData[targetBin] || [];
       binsData[targetBin].push(p);
       phraseBinMap[p.id] = targetBin;
     });
 
     // Save each bin
-    const savePromises = JSONBIN_BIN_IDS.map(binId => {
+    const savePromises = Object.keys(binsData).map(binId => {
       const payload = JSON.stringify({ status: "active", phrases: binsData[binId] });
       return fetch(`https://api.jsonbin.io/v3/b/${binId}`, {
         method: 'PUT',
@@ -194,7 +250,7 @@ async function saveToCloud() {
         },
         body: payload
       }).then(res => {
-        if (!res.ok) throw new Error(`Save failed for bin ${binId}`);
+        if (!res.ok) throw new Error(`Save failed for bin ${binId} (${res.status})`);
         return res.json();
       }).catch(err => {
         console.error(`Failed to save bin ${binId}:`, err);
@@ -202,13 +258,20 @@ async function saveToCloud() {
       });
     });
 
-    await Promise.all(savePromises);
-    
+    const results = await Promise.all(savePromises);
+    const failedCount = results.filter(r => r === null).length;
+
+    if (failedCount > 0) {
+      showToast(`Saved with ${failedCount} error(s). Check console.`);
+      setSyncStatus('error');
+      return false;
+    }
+
     // Warn the user if they need to make a new bin
     if (binsAreFull) {
       showToast('Warning: All bins are full! Create a new bin ID.');
     }
-    
+
     // Update local cache on success
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state.phrases));
     setSyncStatus('synced');
@@ -220,6 +283,7 @@ async function saveToCloud() {
     return false;
   }
 }
+
 // ============ Utilities ============
 function uid() {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -250,7 +314,7 @@ function showToast(msg) {
   els.toast.textContent = msg;
   els.toast.classList.add('show');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => els.toast.classList.remove('show'), 2000);
+  toastTimer = setTimeout(() => els.toast.classList.remove('show'), 2200);
 }
 
 // ============ Filtering ============
@@ -278,7 +342,7 @@ function getFiltered() {
     filtered = filtered.slice(0, 20); // Show only 20
   } else {
     // Otherwise, sort by date
-    filtered.sort((a, b) => b.createdAt - a.createdAt);
+    filtered.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
   }
 
   return filtered;
@@ -300,7 +364,7 @@ function renderCount() {
 }
 
 function renderTags() {
-  const tags = getAllTags(false); 
+  const tags = getAllTags(false);
   els.tagsFilter.innerHTML = '';
 
   const all = document.createElement('button');
@@ -313,8 +377,8 @@ function renderTags() {
     const b = document.createElement('button');
     b.className = 'tag-chip' + (state.activeTags.includes(tag) ? ' active' : '');
     b.innerHTML = `
-      ${escapeHtml(tag)} 
-      <span class="count">${count}</span> 
+      ${escapeHtml(tag)}
+      <span class="count">${count}</span>
       <span class="tag-action pin">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>
       </span>
@@ -344,14 +408,14 @@ function renderPinnedTags() {
     return;
   }
   els.pinnedTagsFilter.style.display = 'flex';
-  
+
   state.pinnedTags.forEach(tag => {
     const b = document.createElement('button');
     b.className = 'tag-chip pinned' + (state.activeTags.includes(tag) ? ' active' : '');
     const count = state.phrases.filter(p => (p.tags || []).includes(tag)).length;
     b.innerHTML = `
-      ${escapeHtml(tag)} 
-      <span class="count">${count}</span> 
+      ${escapeHtml(tag)}
+      <span class="count">${count}</span>
       <span class="tag-action unpin">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"><path d="M3 21l18-18"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7"/></svg>
       </span>
@@ -471,19 +535,19 @@ function renderList(animate) {
   filtered.forEach((p, i) => {
     const card = document.createElement('article');
     card.className = 'phrase-card' + (animate ? ' animate-in' : '');
-    
+
     if (state.selectionMode) {
       card.classList.add('selectable');
       if (state.selectedIds.includes(p.id)) {
         card.classList.add('selected');
       }
     }
-    
+
     card.dataset.id = p.id;
     if (animate) card.style.animationDelay = (Math.min(i, 8) * 35) + 'ms';
 
     let actionsHTML = '';
-    
+
     if (state.selectionMode) {
       if (state.selectedIds.includes(p.id)) {
         actionsHTML = `
@@ -548,7 +612,7 @@ function renderList(animate) {
 
 // ============ Press-and-hold & Selection ============
 function attachCardHandlers(card, phrase) {
-  
+
   if (state.selectionMode) {
     card.addEventListener('click', (e) => {
       if (e.target.closest('.selection-delete-btn')) {
@@ -626,7 +690,7 @@ function attachCardHandlers(card, phrase) {
   const selectBtn = card.querySelector('[data-action="select"]');
   const editBtn = card.querySelector('[data-action="edit"]');
   const delBtn = card.querySelector('[data-action="delete"]');
-  
+
   if (selectBtn) {
     selectBtn.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -634,15 +698,15 @@ function attachCardHandlers(card, phrase) {
     });
   }
   if (editBtn) {
-    editBtn.addEventListener('click', (e) => { 
-      e.stopPropagation(); 
-      openModal(phrase.id); 
+    editBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      openModal(phrase.id);
     });
   }
   if (delBtn) {
-    delBtn.addEventListener('click', (e) => { 
-      e.stopPropagation(); 
-      deletePhrase(phrase.id); 
+    delBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      deletePhrase(phrase.id);
     });
   }
 }
@@ -701,10 +765,10 @@ async function deleteSelected() {
 document.addEventListener('click', (e) => {
   if (state.suppressClick) return;
   if (e.target.closest('.action-btn')) return;
-  if (e.target.closest('.tag-action')) return; 
-  
+  if (e.target.closest('.tag-action')) return;
+
   document.querySelectorAll('.tag-chip.editing').forEach(c => c.classList.remove('editing'));
-  
+
   const card = e.target.closest('.phrase-card');
   if (card && card.classList.contains('revealed')) return;
   document.querySelectorAll('.phrase-card.revealed').forEach(c => c.classList.remove('revealed'));
@@ -764,7 +828,7 @@ function renderTagEditor() {
 }
 
 function renderSuggestions() {
-  const all = getAllTags(true).map(t => t.tag); 
+  const all = getAllTags(true).map(t => t.tag);
   const available = all.filter(t => !state.draftTags.includes(t)).slice(0, 8);
   els.tagSuggestions.innerHTML = '';
   if (available.length === 0) {
