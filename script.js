@@ -1,16 +1,34 @@
 // ============================================================
-// Phrases — Personal Lexicon (Supabase Edition)
-// Clean, reliable, no more multi-bin headaches
+// Phrases — a personal lexicon (JSONBin.io Cloud Edition)
+// SAFER VERSION — protects against partial loads & overwrites
 // ============================================================
 
-// ========== SUPABASE CONFIG ==========
-// Paste your Project URL and anon key here
-const SUPABASE_URL = 'https://rpejghwofqymsrcjaedq.supabase.co';          // ← your Project URL
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJwZWpnaHdvZnF5bXNyY2phZWRxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODc2MDcxMDUsImV4cCI6MjEwMzE4MzEwNX0.rmF-NlDuldxVqx1Uk6Ggsp2xk-k9AENpX8cbyt4lVkM'; // ← your anon public key
+// =======================================================================
+// 1. JSONBIN.IO CONFIGURATION
+// Paste your Bin IDs and API Key (X-Master-Key) below.
+// =======================================================================
+const JSONBIN_BIN_IDS = [
+  // Put ALL your bin IDs here (the ones you just cleaned + any others)
+  "6a8c8eb1f5f4af5e293d4c7d", 
+  "6a8ae059f5f4af5e2938446a",
+  "6a8c93e2f5f4af5e293d6012",
+  "6a8cac9eda38895dfe0c1f64",
+  "6a8ca826f5f4af5e293da17b",
+  "6a8cb032f5f4af5e293dbe46",
+  "6a8cb11df5f4af5e293dc17c",
+  "6a8cb1eff5f4af5e293dc3f5"
+];
+const JSONBIN_API_KEY = "$2a$10$0dH1LXansfpglhcBp0tRzuqI.DBNyYqAF2iQxCH4fIOhn4MmK02au"; // ← your X-Master-Key
+const phraseBinMap = {};
 
-const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+// =======================================================================
 
-// ========== State ==========
+const STORAGE_KEY = 'phrases.local.cache';
+
+// Critical safety flag
+let lastLoadComplete = false;
+
+// ============ State ============
 const state = {
   phrases: [],
   search: '',
@@ -24,7 +42,7 @@ const state = {
   pinnedTags: []
 };
 
-// ========== DOM refs ==========
+// ============ DOM refs ============
 const $ = (sel) => document.querySelector(sel);
 const els = {
   list:               $('#phrases-list'),
@@ -52,108 +70,212 @@ const els = {
   btnCancelSelection: $('#btn-cancel-selection')
 };
 
-// ========== Sync Indicator ==========
+// ============ Sync Indicator ============
 function setSyncStatus(status) {
   els.syncIndicator.classList.remove('syncing', 'error');
   if (status === 'syncing') els.syncIndicator.classList.add('syncing');
   if (status === 'error') els.syncIndicator.classList.add('error');
 }
 
-// ========== Cloud Load / Save ==========
+// Helper: fetch one bin with retries
+async function fetchBinData(binId, retries = 2) {
+  if (!binId || !binId.trim()) return null;
+
+  try {
+    const res = await fetch(`https://api.jsonbin.io/v3/b/${binId}/latest`, {
+      method: 'GET',
+      headers: { 'X-Master-Key': JSONBIN_API_KEY }
+    });
+    if (!res.ok) throw new Error(`Status: ${res.status}`);
+    return await res.json();
+  } catch (err) {
+    if (retries > 0) {
+      await new Promise(r => setTimeout(r, 700));
+      return fetchBinData(binId, retries - 1);
+    }
+    console.warn(`Failed to load bin ${binId}:`, err);
+    return null;
+  }
+}
+
 async function loadFromCloud() {
   setSyncStatus('syncing');
-  try {
-    const { data, error } = await supabase
-      .from('phrases')
-      .select('*')
-      .order('created_at', { ascending: false });
+  lastLoadComplete = false;
 
-    if (error) throw error;
+  // Clear old map
+  for (let id in phraseBinMap) delete phraseBinMap[id];
 
-    // Normalize data (Supabase returns tags as array already)
-    state.phrases = (data || []).map(p => ({
-      id: p.id,
-      text: p.text || '',
-      meaning: p.meaning || '',
-      tags: Array.isArray(p.tags) ? p.tags : [],
-      createdAt: p.created_at ? new Date(p.created_at).getTime() : Date.now()
-    }));
+  const validBins = JSONBIN_BIN_IDS.filter(id => id && id.trim());
+  const fetchPromises = validBins.map(id => fetchBinData(id));
+  const results = await Promise.all(fetchPromises);
 
-    setSyncStatus('synced');
-    return true;
-  } catch (err) {
-    console.error('Load failed:', err);
-    setSyncStatus('error');
-    showToast('Failed to load phrases');
-    return false;
-  }
-}
+  const allPhrases = [];
+  let successCount = 0;
 
-async function savePhraseToCloud(phrase, isUpdate = false) {
-  setSyncStatus('syncing');
-  try {
-    if (isUpdate) {
-      const { error } = await supabase
-        .from('phrases')
-        .update({
-          text: phrase.text,
-          meaning: phrase.meaning || '',
-          tags: phrase.tags || []
-        })
-        .eq('id', phrase.id);
+  results.forEach((data, index) => {
+    const binId = validBins[index];
+    if (!data || !data.record) return;
 
-      if (error) throw error;
+    successCount++;
+
+    let phrases = [];
+    if (Array.isArray(data.record.phrases)) {
+      phrases = data.record.phrases;
+    } else if (Array.isArray(data.record)) {
+      phrases = data.record;
     } else {
-      const { data, error } = await supabase
-        .from('phrases')
-        .insert({
-          text: phrase.text,
-          meaning: phrase.meaning || '',
-          tags: phrase.tags || []
-        })
-        .select()
-        .single();
-
-      if (error) throw error;
-
-      // Update local id with the real UUID from Supabase
-      phrase.id = data.id;
-      phrase.createdAt = new Date(data.created_at).getTime();
+      console.warn(`Unexpected structure in bin ${binId}`);
+      return;
     }
 
+    phrases.forEach(p => {
+      // Skip completely broken entries
+      if (!p || (typeof p.text !== 'string' && typeof p.expression !== 'string')) {
+        console.warn('Skipping invalid phrase:', p);
+        return;
+      }
+
+      // Normalize: support both old "expression" and correct "text"
+      const text = (p.text || p.expression || '').trim();
+      if (!text) return;
+
+      // Prefer existing ID, only generate if missing
+      if (!p.id) {
+        p.id = uid();
+        console.warn('Generated missing ID for:', text.slice(0, 40));
+      }
+
+      // Normalize fields
+      const normalized = {
+        id: p.id,
+        text: text,
+        meaning: typeof p.meaning === 'string' ? p.meaning : '',
+        tags: Array.isArray(p.tags) ? p.tags : [],
+        createdAt: p.createdAt || Date.now()
+      };
+
+      // Deduplicate by ID
+      if (!phraseBinMap[normalized.id]) {
+        allPhrases.push(normalized);
+        phraseBinMap[normalized.id] = binId;
+      }
+    });
+  });
+
+  state.phrases = allPhrases;
+  lastLoadComplete = (successCount === validBins.length && validBins.length > 0);
+
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(state.phrases));
+
+  if (lastLoadComplete) {
     setSyncStatus('synced');
     return true;
-  } catch (err) {
-    console.error('Save failed:', err);
+  } else {
     setSyncStatus('error');
-    showToast('Failed to save');
+    showToast(`Partial load (${successCount}/${validBins.length} bins). Saving is blocked to protect your data.`);
+    console.warn('Partial load — saveToCloud will refuse to run');
     return false;
   }
 }
 
-async function deleteFromCloud(ids) {
+async function saveToCloud() {
+  // ========== CRITICAL SAFETY ==========
+  if (!lastLoadComplete) {
+    showToast('Cannot save: previous load was incomplete. Refresh the page first.');
+    setSyncStatus('error');
+    return false;
+  }
+
   setSyncStatus('syncing');
   try {
-    const { error } = await supabase
-      .from('phrases')
-      .delete()
-      .in('id', ids);
+    const binsData = {};
+    const validBins = JSONBIN_BIN_IDS.filter(id => id && id.trim());
+    validBins.forEach(id => binsData[id] = []);
 
-    if (error) throw error;
+    const MAX_BIN_SIZE = 90000;
+    let binsAreFull = false;
+
+    state.phrases.forEach(p => {
+      if (!p || !p.id || !p.text) return;
+
+      let targetBin = phraseBinMap[p.id];
+
+      // New phrase → find a bin with space
+      if (!targetBin) {
+        for (const binId of validBins) {
+          const testPayload = JSON.stringify({ status: "active", phrases: [...(binsData[binId] || []), p] });
+          if (new Blob([testPayload]).size < MAX_BIN_SIZE) {
+            targetBin = binId;
+            break;
+          }
+        }
+        // fallback
+        if (!targetBin) targetBin = validBins[validBins.length - 1];
+      }
+
+      if (!targetBin) return;
+
+      binsData[targetBin] = binsData[targetBin] || [];
+      binsData[targetBin].push({
+        id: p.id,
+        text: p.text,
+        meaning: p.meaning || '',
+        tags: p.tags || [],
+        createdAt: p.createdAt || Date.now()
+      });
+      phraseBinMap[p.id] = targetBin;
+
+      // Check if this bin is getting full
+      const size = new Blob([JSON.stringify({ status: "active", phrases: binsData[targetBin] })]).size;
+      if (size >= MAX_BIN_SIZE) binsAreFull = true;
+    });
+
+    // Save every bin
+    const savePromises = validBins.map(binId => {
+      const payload = JSON.stringify({ status: "active", phrases: binsData[binId] || [] });
+      return fetch(`https://api.jsonbin.io/v3/b/${binId}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Master-Key': JSONBIN_API_KEY
+        },
+        body: payload
+      }).then(res => {
+        if (!res.ok) throw new Error(`Save failed for ${binId}: ${res.status}`);
+        return res.json();
+      }).catch(err => {
+        console.error(err);
+        return null;
+      });
+    });
+
+    const results = await Promise.all(savePromises);
+    const failed = results.filter(r => r === null).length;
+
+    if (failed > 0) {
+      showToast(`Saved with ${failed} error(s). Check console.`);
+      setSyncStatus('error');
+      return false;
+    }
+
+    if (binsAreFull) {
+      showToast('Warning: Some bins are getting full. Consider adding a new bin.');
+    }
+
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state.phrases));
     setSyncStatus('synced');
     return true;
-  } catch (err) {
-    console.error('Delete failed:', err);
+  } catch (e) {
+    console.warn('Cloud save failed:', e);
     setSyncStatus('error');
-    showToast('Failed to delete');
+    showToast('Offline: saved locally only');
     return false;
   }
 }
 
-// ========== Utilities ==========
+// ============ Utilities ============
 function uid() {
-  // Only used temporarily before Supabase returns the real UUID
-  return crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2);
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 }
 
 function getAllTags(includePinned = false) {
@@ -184,7 +306,7 @@ function showToast(msg) {
   toastTimer = setTimeout(() => els.toast.classList.remove('show'), 2200);
 }
 
-// ========== Filtering ==========
+// ============ Filtering ============
 function getFiltered() {
   const q = state.search.toLowerCase().trim();
   let filtered = state.phrases.filter(p => {
@@ -197,7 +319,7 @@ function getFiltered() {
     return hay.includes(q);
   });
 
-  // RANDOM FEED: show 20 random when no filters
+  // RANDOM FEED
   if (state.activeTags.length === 0 && q === '') {
     for (let i = filtered.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
@@ -211,7 +333,7 @@ function getFiltered() {
   return filtered;
 }
 
-// ========== Render ==========
+// ============ Render ============
 function render(animateCards = false) {
   renderTags();
   renderPinnedTags();
@@ -356,15 +478,11 @@ function attachTagHoldHandlers(btn, tag, isPinned) {
 }
 
 async function deleteTagFromAllCards(tag) {
-  // Update every phrase that has this tag
-  const affected = state.phrases.filter(p => (p.tags || []).includes(tag));
-  
-  for (const p of affected) {
-    p.tags = p.tags.filter(t => t !== tag);
-    await savePhraseToCloud(p, true);
-  }
-  
-  showToast('Tag removed from all phrases');
+  state.phrases.forEach(p => {
+    if (p.tags) p.tags = p.tags.filter(t => t !== tag);
+  });
+  showToast('Deleting tag from cloud...');
+  await saveToCloud();
 }
 
 function savePinnedTags() {
@@ -459,7 +577,6 @@ function renderList(animate) {
     els.list.appendChild(card);
   });
 
-  // Random feed message
   if (state.activeTags.length === 0 && state.search === '' && state.phrases.length > 20) {
     const msg = document.createElement('div');
     msg.className = 'no-results';
@@ -473,7 +590,7 @@ function renderList(animate) {
   }
 }
 
-// ========== Card handlers ==========
+// ============ Card handlers ============
 function attachCardHandlers(card, phrase) {
   if (state.selectionMode) {
     card.addEventListener('click', (e) => {
@@ -615,17 +732,13 @@ function toggleSelectionMode() {
 
 async function deleteSelected() {
   const count = state.selectedIds.length;
-  const idsToDelete = [...state.selectedIds];
-  
-  state.phrases = state.phrases.filter(p => !idsToDelete.includes(p.id));
+  state.phrases = state.phrases.filter(p => !state.selectedIds.includes(p.id));
   state.selectedIds = [];
   toggleSelectionMode();
-  
-  showToast(`Deleting ${count} phrases...`);
-  await deleteFromCloud(idsToDelete);
+  showToast(`Deleting ${count} phrases from cloud...`);
+  await saveToCloud();
 }
 
-// Close revealed cards / editing tags when clicking outside
 document.addEventListener('click', (e) => {
   if (state.suppressClick) return;
   if (e.target.closest('.action-btn')) return;
@@ -638,7 +751,7 @@ document.addEventListener('click', (e) => {
   document.querySelectorAll('.phrase-card.revealed').forEach(c => c.classList.remove('revealed'));
 });
 
-// ========== Modal ==========
+// ============ Modal ============
 function openModal(id = null) {
   document.querySelectorAll('.phrase-card.revealed').forEach(c => c.classList.remove('revealed'));
 
@@ -673,7 +786,7 @@ function closeModal() {
   state.draftTags = [];
 }
 
-// ========== Tag editor ==========
+// ============ Tag editor ============
 function renderTagEditor() {
   [...els.tagEditor.children].forEach(c => {
     if (c !== els.tagInput) c.remove();
@@ -746,7 +859,7 @@ els.tagEditor.addEventListener('click', (e) => {
   if (e.target === els.tagEditor) els.tagInput.focus();
 });
 
-// ========== CRUD ==========
+// ============ CRUD ============
 async function savePhrase(e) {
   e.preventDefault();
   if (els.tagInput.value.trim()) addTagFromInput();
@@ -761,34 +874,32 @@ async function savePhrase(e) {
       p.text = text;
       p.meaning = meaning;
       p.tags = [...state.draftTags];
-      showToast('Updating...');
-      await savePhraseToCloud(p, true);
     }
+    showToast('Updating cloud...');
   } else {
-    const newPhrase = {
-      id: uid(), // temporary, will be replaced by Supabase UUID
+    state.phrases.unshift({
+      id: uid(),
       text,
       meaning,
       tags: [...state.draftTags],
       createdAt: Date.now()
-    };
-    state.phrases.unshift(newPhrase);
-    showToast('Saving...');
-    await savePhraseToCloud(newPhrase, false);
+    });
+    showToast('Saving to cloud...');
   }
 
   render(false);
   closeModal();
+  await saveToCloud();
 }
 
 async function deletePhrase(id) {
   state.phrases = state.phrases.filter(p => p.id !== id);
   render(false);
-  showToast('Deleting...');
-  await deleteFromCloud([id]);
+  showToast('Deleting from cloud...');
+  await saveToCloud();
 }
 
-// ========== Event wiring ==========
+// ============ Event wiring ============
 els.addBtn.addEventListener('click', () => openModal());
 els.btnDeleteSelected.addEventListener('click', deleteSelected);
 els.btnCancelSelection.addEventListener('click', toggleSelectionMode);
@@ -817,7 +928,7 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && state.selectionMode) toggleSelectionMode();
 });
 
-// ========== Init ==========
+// ============ Init ============
 async function init() {
   loadPinnedTags();
   await loadFromCloud();
