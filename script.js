@@ -1,14 +1,14 @@
 // ============================================================
 // Phrases — a personal lexicon (JSONBin.io Cloud Edition)
-// SAFER VERSION — protects against partial loads & overwrites
+// SAFER + SEQUENTIAL LOAD VERSION
+// Loads bins one-by-one to avoid rate limits / partial loads
 // ============================================================
 
 // =======================================================================
 // 1. JSONBIN.IO CONFIGURATION
-// Paste your Bin IDs and API Key (X-Master-Key) below.
 // =======================================================================
 const JSONBIN_BIN_IDS = [
-  // Put ALL your bin IDs here (the ones you just cleaned + any others)
+  // Put ALL your 8 bin IDs here
   "6a8c8eb1f5f4af5e293d4c7d", 
   "6a8ae059f5f4af5e2938446a",
   "6a8c93e2f5f4af5e293d6012",
@@ -24,8 +24,6 @@ const phraseBinMap = {};
 // =======================================================================
 
 const STORAGE_KEY = 'phrases.local.cache';
-
-// Critical safety flag
 let lastLoadComplete = false;
 
 // ============ State ============
@@ -78,7 +76,7 @@ function setSyncStatus(status) {
 }
 
 // Helper: fetch one bin with retries
-async function fetchBinData(binId, retries = 2) {
+async function fetchBinData(binId, retries = 3) {
   if (!binId || !binId.trim()) return null;
 
   try {
@@ -90,7 +88,7 @@ async function fetchBinData(binId, retries = 2) {
     return await res.json();
   } catch (err) {
     if (retries > 0) {
-      await new Promise(r => setTimeout(r, 700));
+      await new Promise(r => setTimeout(r, 800));
       return fetchBinData(binId, retries - 1);
     }
     console.warn(`Failed to load bin ${binId}:`, err);
@@ -98,6 +96,7 @@ async function fetchBinData(binId, retries = 2) {
   }
 }
 
+// ============ SEQUENTIAL LOAD (one bin at a time) ============
 async function loadFromCloud() {
   setSyncStatus('syncing');
   lastLoadComplete = false;
@@ -106,15 +105,18 @@ async function loadFromCloud() {
   for (let id in phraseBinMap) delete phraseBinMap[id];
 
   const validBins = JSONBIN_BIN_IDS.filter(id => id && id.trim());
-  const fetchPromises = validBins.map(id => fetchBinData(id));
-  const results = await Promise.all(fetchPromises);
-
   const allPhrases = [];
   let successCount = 0;
+  const failedBins = [];
 
-  results.forEach((data, index) => {
-    const binId = validBins[index];
-    if (!data || !data.record) return;
+  // Load one by one instead of all at once
+  for (const binId of validBins) {
+    const data = await fetchBinData(binId);
+
+    if (!data || !data.record) {
+      failedBins.push(binId.substring(0, 8) + '...');
+      continue;
+    }
 
     successCount++;
 
@@ -125,27 +127,21 @@ async function loadFromCloud() {
       phrases = data.record;
     } else {
       console.warn(`Unexpected structure in bin ${binId}`);
-      return;
+      continue;
     }
 
     phrases.forEach(p => {
-      // Skip completely broken entries
-      if (!p || (typeof p.text !== 'string' && typeof p.expression !== 'string')) {
-        console.warn('Skipping invalid phrase:', p);
-        return;
-      }
+      if (!p) return;
 
-      // Normalize: support both old "expression" and correct "text"
+      // Support both "text" and old "expression"
       const text = (p.text || p.expression || '').trim();
       if (!text) return;
 
-      // Prefer existing ID, only generate if missing
       if (!p.id) {
         p.id = uid();
         console.warn('Generated missing ID for:', text.slice(0, 40));
       }
 
-      // Normalize fields
       const normalized = {
         id: p.id,
         text: text,
@@ -154,13 +150,16 @@ async function loadFromCloud() {
         createdAt: p.createdAt || Date.now()
       };
 
-      // Deduplicate by ID
+      // Deduplicate
       if (!phraseBinMap[normalized.id]) {
         allPhrases.push(normalized);
         phraseBinMap[normalized.id] = binId;
       }
     });
-  });
+
+    // Small pause between bins to be gentle on JSONBin
+    await new Promise(r => setTimeout(r, 250));
+  }
 
   state.phrases = allPhrases;
   lastLoadComplete = (successCount === validBins.length && validBins.length > 0);
@@ -169,11 +168,15 @@ async function loadFromCloud() {
 
   if (lastLoadComplete) {
     setSyncStatus('synced');
+    showToast(`Loaded ${allPhrases.length} phrases from ${successCount} bins`);
     return true;
   } else {
     setSyncStatus('error');
-    showToast(`Partial load (${successCount}/${validBins.length} bins). Saving is blocked to protect your data.`);
-    console.warn('Partial load — saveToCloud will refuse to run');
+    const msg = failedBins.length
+      ? `Partial load (${successCount}/${validBins.length}). Failed: ${failedBins.join(', ')}`
+      : `Partial load (${successCount}/${validBins.length} bins)`;
+    showToast(msg);
+    console.warn('Partial load — save is blocked. Failed bins:', failedBins);
     return false;
   }
 }
@@ -200,7 +203,6 @@ async function saveToCloud() {
 
       let targetBin = phraseBinMap[p.id];
 
-      // New phrase → find a bin with space
       if (!targetBin) {
         for (const binId of validBins) {
           const testPayload = JSON.stringify({ status: "active", phrases: [...(binsData[binId] || []), p] });
@@ -209,7 +211,6 @@ async function saveToCloud() {
             break;
           }
         }
-        // fallback
         if (!targetBin) targetBin = validBins[validBins.length - 1];
       }
 
@@ -225,32 +226,30 @@ async function saveToCloud() {
       });
       phraseBinMap[p.id] = targetBin;
 
-      // Check if this bin is getting full
       const size = new Blob([JSON.stringify({ status: "active", phrases: binsData[targetBin] })]).size;
       if (size >= MAX_BIN_SIZE) binsAreFull = true;
     });
 
-    // Save every bin
-    const savePromises = validBins.map(binId => {
+    // Save bins one by one too (gentler)
+    let failed = 0;
+    for (const binId of validBins) {
       const payload = JSON.stringify({ status: "active", phrases: binsData[binId] || [] });
-      return fetch(`https://api.jsonbin.io/v3/b/${binId}`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-Master-Key': JSONBIN_API_KEY
-        },
-        body: payload
-      }).then(res => {
-        if (!res.ok) throw new Error(`Save failed for ${binId}: ${res.status}`);
-        return res.json();
-      }).catch(err => {
-        console.error(err);
-        return null;
-      });
-    });
-
-    const results = await Promise.all(savePromises);
-    const failed = results.filter(r => r === null).length;
+      try {
+        const res = await fetch(`https://api.jsonbin.io/v3/b/${binId}`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Master-Key': JSONBIN_API_KEY
+          },
+          body: payload
+        });
+        if (!res.ok) throw new Error(`Status ${res.status}`);
+      } catch (err) {
+        console.error(`Failed to save bin ${binId}:`, err);
+        failed++;
+      }
+      await new Promise(r => setTimeout(r, 200));
+    }
 
     if (failed > 0) {
       showToast(`Saved with ${failed} error(s). Check console.`);
@@ -259,7 +258,7 @@ async function saveToCloud() {
     }
 
     if (binsAreFull) {
-      showToast('Warning: Some bins are getting full. Consider adding a new bin.');
+      showToast('Warning: Some bins are getting full.');
     }
 
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state.phrases));
@@ -303,7 +302,7 @@ function showToast(msg) {
   els.toast.textContent = msg;
   els.toast.classList.add('show');
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => els.toast.classList.remove('show'), 2200);
+  toastTimer = setTimeout(() => els.toast.classList.remove('show'), 2500);
 }
 
 // ============ Filtering ============
@@ -319,7 +318,6 @@ function getFiltered() {
     return hay.includes(q);
   });
 
-  // RANDOM FEED
   if (state.activeTags.length === 0 && q === '') {
     for (let i = filtered.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
