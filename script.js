@@ -16,7 +16,9 @@ const JSONBIN_BIN_IDS = [
   "6a8ca826f5f4af5e293da17b",
   "6a8cb032f5f4af5e293dbe46",
   "6a8cb11df5f4af5e293dc17c",
-  "6a8cb1eff5f4af5e293dc3f5"
+  "6a8cb1eff5f4af5e293dc3f5",
+  "6a916fabda38895dfe1befeb",
+  "6a916fc8f5f4af5e294d85c0"
 ];
 const JSONBIN_API_KEY = "$2a$10$0dH1LXansfpglhcBp0tRzuqI.DBNyYqAF2iQxCH4fIOhn4MmK02au"; // ← your X-Master-Key
 const phraseBinMap = {};
