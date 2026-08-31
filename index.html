@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<meta name="theme-color" content="#ffffff">
+<title>Phrases — A Personal Lexicon</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300..900;1,9..144,300..900&family=DM+Sans:opsz,wght@9..40,400..700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="app">
+  <header class="header">
+    <div class="brand">Phrases<span class="brand-dot"></span></div>
+    <div class="brand-count">
+      <span class="sync-indicator" id="sync-indicator"></span>
+      <span id="count-display">Loading...</span>
+    </div>
+  </header>
+
+  <div class="search-row">
+    <div class="search-bar">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="11" cy="11" r="7"/>
+        <path d="m20 20-3.5-3.5"/>
+      </svg>
+      <input type="text" class="search-input" id="search-input" placeholder="Search phrases, meanings, tags…" autocomplete="off" spellcheck="false">
+      <button class="clear-btn" id="clear-btn" aria-label="Clear search" style="display:none;">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round">
+          <path d="M18 6 6 18M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+    <button class="add-btn" id="add-btn" aria-label="Add phrase">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round">
+        <path d="M12 5v14M5 12h14"/>
+      </svg>
+    </button>
+  </div>
+
+  <div class="tags-filter" id="tags-filter"></div>
+  <div class="pinned-tags" id="pinned-tags-filter"></div>
+
+  <main class="phrases" id="phrases-list">
+    <div class="empty-state">
+      <div class="icon">"</div>
+      <h3>Loading cloud...</h3>
+      <p>Fetching your phrases.</p>
+    </div>
+  </main>
+</div>
+
+<div class="selection-bar" id="selection-bar">
+  <div class="sel-count" id="sel-count">0 selected</div>
+  <button class="btn-delete" id="btn-delete-selected">Delete All</button>
+  <button class="btn-cancel" id="btn-cancel-selection">Cancel</button>
+</div>
+
+<footer class="footer">Hold any card to edit or delete · Synced via JSONBin</footer>
+
+<!-- Modal -->
+<div class="modal-backdrop" id="modal-backdrop">
+  <div class="modal" id="modal" role="dialog" aria-modal="true">
+    <div class="modal-handle"></div>
+    <div class="modal-header">
+      <div class="modal-title" id="modal-title">New phrase</div>
+      <button class="modal-close" id="modal-close" aria-label="Close">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round">
+          <path d="M18 6 6 18M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+
+    <!-- Multi-phrase stack tabs (Chrome-style) -->
+    <div id="phrase-stack" class="phrase-stack"></div>
+
+    <form id="phrase-form" autocomplete="off">
+      <div class="field">
+        <label class="field-label" for="phrase-input">Phrase</label>
+        <input type="text" id="phrase-input" placeholder="A word, a line, a quote…" required maxlength="200">
+      </div>
+
+      <div class="field">
+        <label class="field-label" for="meaning-input">Meaning</label>
+        <textarea id="meaning-input" placeholder="What does it mean to you?" maxlength="2000"></textarea>
+      </div>
+
+      <div class="field">
+        <label class="field-label">Tags</label>
+        <div class="tag-editor" id="tag-editor">
+          <input type="text" class="tag-input" id="tag-input" placeholder="Type and press enter…" maxlength="30">
+        </div>
+        <div class="tag-suggestions" id="tag-suggestions"></div>
+      </div>
+
+      <div class="modal-actions">
+        <button type="button" id="add-to-stack-btn" class="add-to-stack-btn" title="Add another phrase to the stack">+</button>
+        <button type="submit" class="save-btn" id="save-btn">Save phrase</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<script src="script.js"></script>
+</body>
+</html>
