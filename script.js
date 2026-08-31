@@ -747,6 +747,12 @@ document.addEventListener('click', (e) => {
 
 // ============ Multi-phrase stack helpers ============
 function saveCurrentFormToDraft() {
+  // FIX: Ensure any text currently typed in the tag input is committed 
+  // to state.draftTags before saving the draft.
+  if (els.tagInput.value.trim()) {
+    addTagFromInput();
+  }
+
   if (state.currentStackIndex < 0 || !state.draftStack[state.currentStackIndex]) return;
   const draft = state.draftStack[state.currentStackIndex];
   draft.text = els.phraseInput.value.trim();
@@ -763,15 +769,22 @@ function addDraftToStack(isFirst = false) {
     tempId: uid(),
     text: '',
     meaning: '',
-    tags: []
+    // FIX: Inherit tags from the current state.draftTags so stacking 
+    // automatically applies the previous phrase's tags.
+    tags: state.draftTags ? [...state.draftTags] : []
   };
 
   state.draftStack.push(newDraft);
   state.currentStackIndex = state.draftStack.length - 1;
 
+  // Clear phrase and meaning inputs for the new draft
   els.phraseInput.value = '';
   els.meaningInput.value = '';
-  state.draftTags = [];
+  // Clear tag input field so it doesn't visually duplicate text if left uncommitted
+  els.tagInput.value = '';
+
+  // NOTE: We intentionally DO NOT clear state.draftTags here anymore.
+  // This allows the new phrase to inherit the previous phrase's tags visually.
   renderTagEditor();
   renderSuggestions();
   renderStackTabs();
@@ -785,6 +798,7 @@ function switchToDraft(index) {
   if (index === state.currentStackIndex) return;
   if (index < 0 || index >= state.draftStack.length) return;
 
+  // Save current form (this now also commits tag input safely)
   saveCurrentFormToDraft();
 
   state.currentStackIndex = index;
@@ -793,6 +807,9 @@ function switchToDraft(index) {
   els.phraseInput.value = draft.text || '';
   els.meaningInput.value = draft.meaning || '';
   state.draftTags = [...(draft.tags || [])];
+  
+  // FIX: Clear tag input when switching tabs to avoid stray text
+  els.tagInput.value = '';
 
   renderTagEditor();
   renderSuggestions();
@@ -830,6 +847,9 @@ function openModal(id = null) {
   state.draftTags = [];
   state.draftStack = [];
   state.currentStackIndex = -1;
+
+  // FIX: Always ensure tag input is cleared when opening modal
+  els.tagInput.value = '';
 
   if (id) {
     // Editing existing phrase → single mode, hide stack + button
